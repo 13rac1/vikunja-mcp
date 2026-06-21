@@ -1,0 +1,112 @@
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck      # Check for unchecked errors
+    - govet         # Vet examines Go source code
+    - ineffassign   # Detect ineffectual assignments
+    - staticcheck   # Advanced Go linter
+    - unused        # Check for unused constants, variables, functions
+    - gocritic      # Opinionated Go linter
+    - misspell      # Check for misspelled English words
+    - gocyclo       # Computes cyclomatic complexity
+    - bodyclose     # Checks HTTP response bodies are closed
+    - errname       # Check error naming conventions
+    - errorlint     # Find code that will cause problems with error wrapping
+    - exhaustive    # Check exhaustiveness of enum switch statements
+    - nilerr        # Find code returning nil even if error is not nil
+    - nilnil        # Check there is no simultaneous return of nil error and invalid value
+    - noctx         # Find HTTP requests without context.Context
+    - predeclared   # Find code that shadows predeclared identifiers
+    - revive        # Extensible Go linter (exported names, package comments)
+    - sloglint      # Enforce consistent structured logging with slog
+    - nolintlint    # Enforce specific linter names and explanations on //nolint
+    - unparam       # Find unused function parameters
+    - forcetypeassert # Flag type assertions without comma-ok
+    - durationcheck # Catch duration multiplication bugs
+    - contextcheck  # Catch context.Background() misuse in contextualized code
+    - gosec         # Security scanner for common vulnerabilities
+    - fatcontext    # Detect nested contexts in loops
+    - intrange      # Use integer range loops (Go 1.22+)
+    - modernize     # Suggest modern Go idioms and stdlib usage
+    - godot         # Enforce doc comments ending in a period
+    - testifylint   # Enforce correct testify usage patterns
+
+  settings:
+    gocyclo:
+      min-complexity: 20
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # negligible savings on low-allocation structs
+
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+    exhaustive:
+      default-signifies-exhaustive: true
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      settings:
+        hugeParam:
+          sizeThreshold: 1024
+
+    revive:
+      severity: warning
+      rules:
+        - name: exported
+          arguments:
+            - "checkPrivateReceivers"
+            - "sayRepetitiveInsteadOfStutters"
+        - name: package-comments
+          disabled: false
+
+    staticcheck:
+      checks: ["all"]
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+  exclusions:
+    generated: strict
+    rules:
+      - text: "Error return value of `.*.Close` is not checked"
+        linters:
+          - errcheck
+      - path: _test\.go
+        linters:
+          - gocyclo
+      - path: _test\.go
+        linters: [gosec]
+        text: "G101:"
+      # gosec: file/directory permissions are fine at 0o644/0o755
+      - linters: [gosec]
+        text: "G306:"
+      - linters: [gosec]
+        text: "G301:"
+      # gosec: file paths and subprocess args come from trusted internal sources
+      - linters: [gosec]
+        text: "G304:"
+      - linters: [gosec]
+        text: "G204:"
+
+formatters:
+  enable:
+    - gofmt         # Check if code is formatted
+    - goimports     # Check if imports are formatted
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

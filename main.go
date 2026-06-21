@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -49,7 +50,11 @@ func main() {
 		)
 		http.Handle("/mcp", handler)
 		log.Printf("vikunja-mcp serving on %s/mcp", *httpAddr)
-		log.Fatal(http.ListenAndServe(*httpAddr, nil))
+		srv := &http.Server{
+			Addr:              *httpAddr,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		log.Fatal(srv.ListenAndServe())
 	} else {
 		if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 			log.Fatal(err)

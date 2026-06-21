@@ -36,7 +36,10 @@ func registerResources(server *mcp.Server, client *Client) {
 		if matches == nil {
 			return nil, mcp.ResourceNotFoundError(req.Params.URI)
 		}
-		id, _ := strconv.ParseInt(matches[1], 10, 64) // regexp guarantees digits
+		id, err := strconv.ParseInt(matches[1], 10, 64)
+		if err != nil {
+			return nil, mcp.ResourceNotFoundError(req.Params.URI)
+		}
 		raw, err := client.doRaw(ctx, "GET", fmt.Sprintf("/projects/%d", id), nil)
 		if err != nil {
 			return nil, err
@@ -57,7 +60,10 @@ func registerResources(server *mcp.Server, client *Client) {
 		if matches == nil {
 			return nil, mcp.ResourceNotFoundError(req.Params.URI)
 		}
-		id, _ := strconv.ParseInt(matches[1], 10, 64) // regexp guarantees digits
+		id, err := strconv.ParseInt(matches[1], 10, 64)
+		if err != nil {
+			return nil, mcp.ResourceNotFoundError(req.Params.URI)
+		}
 		raw, err := client.doRaw(ctx, "GET", fmt.Sprintf("/projects/%d/tasks?per_page=100", id), nil)
 		if err != nil {
 			return nil, err
@@ -78,7 +84,10 @@ func registerResources(server *mcp.Server, client *Client) {
 		if matches == nil {
 			return nil, mcp.ResourceNotFoundError(req.Params.URI)
 		}
-		id, _ := strconv.ParseInt(matches[1], 10, 64) // regexp guarantees digits
+		id, err := strconv.ParseInt(matches[1], 10, 64)
+		if err != nil {
+			return nil, mcp.ResourceNotFoundError(req.Params.URI)
+		}
 		raw, err := client.doRaw(ctx, "GET", fmt.Sprintf("/tasks/%d", id), nil)
 		if err != nil {
 			return nil, err

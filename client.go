@@ -1,3 +1,4 @@
+// Package main implements an MCP server that wraps the Vikunja v2 REST API.
 package main
 
 import (
@@ -64,7 +65,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, body any) ([]by
 		bodyReader = bytes.NewReader(b)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader) //nolint:gosec // URL is from trusted config, not user input
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -74,7 +75,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, body any) ([]by
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) //nolint:gosec // covered by the nolint above
 	if err != nil {
 		return nil, fmt.Errorf("executing request: %w", err)
 	}
