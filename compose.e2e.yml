@@ -1,0 +1,23 @@
+services:
+  vikunja:
+    image: vikunja/vikunja:unstable
+    environment:
+      VIKUNJA_SERVICE_SECRET: e2etestsecret
+      VIKUNJA_SERVICE_PUBLICURL: http://localhost:3456/
+      VIKUNJA_DATABASE_TYPE: sqlite
+      VIKUNJA_DATABASE_PATH: /db/vikunja.db
+    ports:
+      - "3456:3456"
+    volumes:
+      - vikunja-db:/db
+      - vikunja-files:/app/vikunja/files
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3456/api/v1/info"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+volumes:
+  vikunja-db:
+  vikunja-files:
