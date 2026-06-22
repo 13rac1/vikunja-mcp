@@ -99,15 +99,17 @@ func waitForHealthy(ctx context.Context, healthURL string, timeout time.Duration
 }
 
 func setupAuth(ctx context.Context, baseURL string) (string, error) {
+	// Register a user.
 	regBody := map[string]string{
 		"username": "e2etest",
 		"password": "e2etestpass",
 		"email":    "e2e@test.local",
 	}
-	if err := postJSON(ctx, baseURL+"/api/v1/register", regBody, nil); err != nil {
+	if err := postJSON(ctx, baseURL+"/api/v1/register", "", regBody, nil); err != nil {
 		return "", fmt.Errorf("register: %w", err)
 	}
 
+	// Login to get a JWT.
 	loginBody := map[string]string{
 		"username": "e2etest",
 		"password": "e2etestpass",
@@ -115,16 +117,41 @@ func setupAuth(ctx context.Context, baseURL string) (string, error) {
 	var loginResp struct {
 		Token string `json:"token"`
 	}
-	if err := postJSON(ctx, baseURL+"/api/v1/login", loginBody, &loginResp); err != nil {
+	if err := postJSON(ctx, baseURL+"/api/v1/login", "", loginBody, &loginResp); err != nil {
 		return "", fmt.Errorf("login: %w", err)
 	}
 	if loginResp.Token == "" {
 		return "", fmt.Errorf("login returned empty token")
 	}
-	return loginResp.Token, nil
+
+	// Create a scoped API token using the JWT.
+	tokenBody := map[string]any{
+		"title": "e2e-mcp",
+		"permissions": map[string][]string{
+			"projects":        {"read_all", "read_one", "create"},
+			"tasks":           {"read_all", "read_one", "create", "update", "delete"},
+			"labels":          {"read_all", "create"},
+			"tasks_labels":    {"create", "delete"},
+			"tasks_comments":  {"read_all", "create"},
+			"tasks_assignees": {"create", "delete"},
+			"time-entries":    {"read_all", "read_one", "create", "update", "delete"},
+		},
+		"expires_at": "2099-01-01T00:00:00Z",
+	}
+	var tokenResp struct {
+		Token string `json:"token"`
+	}
+	if err := postJSON(ctx, baseURL+"/api/v2/tokens", loginResp.Token, tokenBody, &tokenResp); err != nil {
+		return "", fmt.Errorf("create api token: %w", err)
+	}
+	if tokenResp.Token == "" {
+		return "", fmt.Errorf("api token creation returned empty token")
+	}
+	return tokenResp.Token, nil
 }
 
-func postJSON(ctx context.Context, url string, body, result any) error {
+// postJSON sends a JSON POST request. If authToken is non-empty, it's sent as a Bearer token.
+func postJSON(ctx context.Context, url, authToken string, body, result any) error {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -134,6 +161,9 @@ func postJSON(ctx context.Context, url string, body, result any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
