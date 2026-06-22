@@ -23,7 +23,38 @@ Set two environment variables:
 | Variable | Description |
 |----------|-------------|
 | `VIKUNJA_URL` | Base URL of your Vikunja instance (e.g. `https://vikunja.example.com`) |
-| `VIKUNJA_TOKEN` | API token (starts with `tk_`). Create one in Vikunja under Settings > API Tokens. |
+| `VIKUNJA_TOKEN` | API token (starts with `tk_`). See [Creating an API Token](#creating-an-api-token). |
+
+### Creating an API Token
+
+1. Log in to your Vikunja instance and go to **Settings > API Tokens**, or use the API directly:
+
+```bash
+# Log in to get a JWT
+JWT=$(curl -s -X POST https://vikunja.example.com/api/v1/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username": "your_user", "password": "your_pass"}' | jq -r .token)
+
+# Create a scoped API token
+curl -s -X POST https://vikunja.example.com/api/v2/tokens \
+  -H "Authorization: Bearer $JWT" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "vikunja-mcp",
+    "expires_at": "2099-01-01T00:00:00Z",
+    "permissions": {
+      "projects":        ["read_all", "read_one", "create"],
+      "tasks":           ["read_all", "read_one", "create", "update", "delete"],
+      "labels":          ["read_all", "create"],
+      "tasks_labels":    ["create", "delete"],
+      "tasks_comments":  ["read_all", "create"],
+      "tasks_assignees": ["create", "delete"],
+      "time-entries":    ["read_all", "read_one", "create", "update", "delete"]
+    }
+  }' | jq .token
+```
+
+2. The response contains the `tk_...` token **once** — it cannot be retrieved again. Set it as `VIKUNJA_TOKEN`.
 
 ## Usage
 
