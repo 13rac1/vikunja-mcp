@@ -41,6 +41,10 @@ func main() {
 	registerCommentTools(server, client)
 	registerAssigneeTools(server, client)
 	registerTimeEntryTools(server, client)
+	registerPowerQueryTools(server, client)
+	registerRelationTools(server, client)
+	registerViewTools(server, client)
+	registerBatchTools(server, client)
 	registerResources(server, client)
 	server.AddReceivingMiddleware(errorLoggingMiddleware)
 

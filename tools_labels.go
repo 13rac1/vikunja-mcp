@@ -29,6 +29,10 @@ type RemoveLabelFromTaskInput struct {
 	LabelID int64 `json:"label_id" jsonschema:"the label ID to remove,required"`
 }
 
+type DeleteLabelInput struct {
+	ID int64 `json:"id" jsonschema:"the numeric label ID to delete,required"`
+}
+
 func registerLabelTools(server *mcp.Server, client *Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_labels",
@@ -70,6 +74,17 @@ func registerLabelTools(server *mcp.Server, client *Client) {
 		Description: "Remove a label from a task.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input RemoveLabelFromTaskInput) (*mcp.CallToolResult, any, error) {
 		err := client.do(ctx, "DELETE", fmt.Sprintf("/tasks/%d/labels/%d", input.TaskID, input.LabelID), nil, nil)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		return deleteResult(), nil, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "delete_label",
+		Description: "Delete a label by its numeric ID.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input DeleteLabelInput) (*mcp.CallToolResult, any, error) {
+		err := client.do(ctx, "DELETE", fmt.Sprintf("/labels/%d", input.ID), nil, nil)
 		if err != nil {
 			return errorResult(err), nil, nil
 		}

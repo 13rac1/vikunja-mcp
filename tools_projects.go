@@ -25,6 +25,20 @@ type CreateProjectInput struct {
 	HexColor        string `json:"hex_color,omitempty"         jsonschema:"hex color without leading #"`
 }
 
+type UpdateProjectInput struct {
+	ID              int64   `json:"id"                                jsonschema:"the project ID,required"`
+	Title           *string `json:"title,omitempty"                   jsonschema:"new title"`
+	Description     *string `json:"description,omitempty"             jsonschema:"new description"`
+	Identifier      *string `json:"identifier,omitempty"              jsonschema:"new short identifier"`
+	HexColor        *string `json:"hex_color,omitempty"               jsonschema:"new hex color without #"`
+	ParentProjectID *int64  `json:"parent_project_id,omitempty"       jsonschema:"new parent project ID"`
+	IsArchived      *bool   `json:"is_archived,omitempty"             jsonschema:"archive or unarchive the project"`
+}
+
+type DeleteProjectInput struct {
+	ID int64 `json:"id" jsonschema:"the numeric project ID to delete,required"`
+}
+
 func registerProjectTools(server *mcp.Server, client *Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_projects",
@@ -58,5 +72,27 @@ func registerProjectTools(server *mcp.Server, client *Client) {
 			return errorResult(err), nil, nil
 		}
 		return filteredResult(raw, projectFields), nil, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "update_project",
+		Description: "Update a project's fields. Only the provided fields are changed (partial update via PATCH).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input UpdateProjectInput) (*mcp.CallToolResult, any, error) {
+		raw, err := client.doRaw(ctx, "PATCH", fmt.Sprintf("/projects/%d", input.ID), input)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		return filteredResult(raw, projectFields), nil, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "delete_project",
+		Description: "Delete a project by its numeric ID. This also deletes all tasks in the project.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input DeleteProjectInput) (*mcp.CallToolResult, any, error) {
+		err := client.do(ctx, "DELETE", fmt.Sprintf("/projects/%d", input.ID), nil, nil)
+		if err != nil {
+			return errorResult(err), nil, nil
+		}
+		return deleteResult(), nil, nil
 	})
 }

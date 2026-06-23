@@ -23,29 +23,37 @@ type GetTaskInput struct {
 	ID int64 `json:"id" jsonschema:"the numeric task ID,required"`
 }
 
+type ReminderInput struct {
+	Reminder       string `json:"reminder,omitempty"        jsonschema:"absolute reminder time in ISO 8601 format"`
+	RelativePeriod *int64 `json:"relative_period,omitempty" jsonschema:"relative reminder offset in seconds (negative = before)"`
+	RelativeTo     string `json:"relative_to,omitempty"     jsonschema:"what the relative period is relative to: due_date start_date end_date"`
+}
+
 type CreateTaskInput struct {
-	ProjectID   int64  `json:"project_id"                  jsonschema:"project to create the task in,required"`
-	Title       string `json:"title"                       jsonschema:"task title,required"`
-	Description string `json:"description,omitempty"       jsonschema:"task description (HTML)"`
-	Priority    int64  `json:"priority,omitempty"          jsonschema:"priority (higher number = more important)"`
-	DueDate     string `json:"due_date,omitempty"          jsonschema:"due date in ISO 8601 format"`
-	StartDate   string `json:"start_date,omitempty"        jsonschema:"start date in ISO 8601 format"`
-	EndDate     string `json:"end_date,omitempty"          jsonschema:"end date in ISO 8601 format"`
-	HexColor    string `json:"hex_color,omitempty"         jsonschema:"hex color without leading #"`
-	RepeatAfter int64  `json:"repeat_after,omitempty"      jsonschema:"repeat interval in seconds"`
+	ProjectID   int64           `json:"project_id"                  jsonschema:"project to create the task in,required"`
+	Title       string          `json:"title"                       jsonschema:"task title,required"`
+	Description string          `json:"description,omitempty"       jsonschema:"task description (HTML)"`
+	Priority    int64           `json:"priority,omitempty"          jsonschema:"priority (higher number = more important)"`
+	DueDate     string          `json:"due_date,omitempty"          jsonschema:"due date in ISO 8601 format"`
+	StartDate   string          `json:"start_date,omitempty"        jsonschema:"start date in ISO 8601 format"`
+	EndDate     string          `json:"end_date,omitempty"          jsonschema:"end date in ISO 8601 format"`
+	HexColor    string          `json:"hex_color,omitempty"         jsonschema:"hex color without leading #"`
+	RepeatAfter int64           `json:"repeat_after,omitempty"      jsonschema:"repeat interval in seconds"`
+	Reminders   []ReminderInput `json:"reminders,omitempty"         jsonschema:"list of reminders to set on the task"`
 }
 
 type UpdateTaskInput struct {
-	ID          int64   `json:"id"                          jsonschema:"task ID,required"`
-	Title       *string `json:"title,omitempty"             jsonschema:"new title"`
-	Description *string `json:"description,omitempty"       jsonschema:"new description"`
-	Done        *bool   `json:"done,omitempty"              jsonschema:"completion status"`
-	Priority    *int64  `json:"priority,omitempty"          jsonschema:"new priority"`
-	DueDate     *string `json:"due_date,omitempty"          jsonschema:"new due date (ISO 8601)"`
-	StartDate   *string `json:"start_date,omitempty"        jsonschema:"new start date (ISO 8601)"`
-	EndDate     *string `json:"end_date,omitempty"          jsonschema:"new end date (ISO 8601)"`
-	HexColor    *string `json:"hex_color,omitempty"         jsonschema:"new hex color without #"`
-	ProjectID   *int64  `json:"project_id,omitempty"        jsonschema:"move task to a different project"`
+	ID          int64            `json:"id"                          jsonschema:"task ID,required"`
+	Title       *string          `json:"title,omitempty"             jsonschema:"new title"`
+	Description *string          `json:"description,omitempty"       jsonschema:"new description"`
+	Done        *bool            `json:"done,omitempty"              jsonschema:"completion status"`
+	Priority    *int64           `json:"priority,omitempty"          jsonschema:"new priority"`
+	DueDate     *string          `json:"due_date,omitempty"          jsonschema:"new due date (ISO 8601)"`
+	StartDate   *string          `json:"start_date,omitempty"        jsonschema:"new start date (ISO 8601)"`
+	EndDate     *string          `json:"end_date,omitempty"          jsonschema:"new end date (ISO 8601)"`
+	HexColor    *string          `json:"hex_color,omitempty"         jsonschema:"new hex color without #"`
+	ProjectID   *int64           `json:"project_id,omitempty"        jsonschema:"move task to a different project"`
+	Reminders   *[]ReminderInput `json:"reminders,omitempty"         jsonschema:"replace all reminders (pass empty array to clear)"`
 }
 
 type DeleteTaskInput struct {

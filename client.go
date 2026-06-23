@@ -154,6 +154,7 @@ var taskFields = map[string]bool{
 	"assignees": true, "labels": true, "created_by": true,
 	"created": true, "updated": true,
 	"bucket_id": true, "is_favorite": true,
+	"related_tasks": true, "reminders": true,
 }
 
 var projectFields = map[string]bool{
@@ -181,6 +182,28 @@ var timeEntryFields = map[string]bool{
 	"comment": true, "created": true, "updated": true,
 }
 
+var taskRelationFields = map[string]bool{
+	"task_id": true, "other_task_id": true,
+	"relation_kind": true, "created_by": true, "created": true,
+}
+
+var reminderFields = map[string]bool{
+	"reminder": true, "relative_period": true, "relative_to": true,
+}
+
+var viewFields = map[string]bool{
+	"id": true, "title": true, "project_id": true,
+	"view_kind": true, "filter": true, "position": true,
+	"bucket_configuration_mode": true, "default_bucket_id": true,
+	"done_bucket_id": true, "created": true, "updated": true,
+}
+
+var bucketFields = map[string]bool{
+	"id": true, "title": true, "position": true,
+	"limit": true, "count": true, "tasks": true,
+	"created": true, "updated": true,
+}
+
 // nestedWhitelists maps field names to whitelists for their nested objects.
 var nestedWhitelists = map[string]map[string]bool{
 	"created_by": userFields,
@@ -188,6 +211,14 @@ var nestedWhitelists = map[string]map[string]bool{
 	"author":     userFields,
 	"assignees":  userFields,
 	"labels":     labelFields,
+	"reminders":  reminderFields,
+	"tasks":      taskFields,
+}
+
+// mapOfArraysWhitelists maps field names whose value is map[string][]object
+// (e.g. related_tasks: {"subtask": [...tasks], "related": [...tasks]}).
+var mapOfArraysWhitelists = map[string]map[string]bool{
+	"related_tasks": taskFields,
 }
 
 // filterObject removes non-whitelisted keys from a map and filters nested objects.
@@ -197,17 +228,31 @@ func filterObject(m map[string]any, whitelist map[string]bool) {
 			delete(m, key)
 			continue
 		}
-		nested, ok := nestedWhitelists[key]
-		if !ok {
+		// Standard nested objects/arrays (e.g. created_by, assignees, labels).
+		if nested, ok := nestedWhitelists[key]; ok {
+			switch v := m[key].(type) {
+			case map[string]any:
+				filterObject(v, nested)
+			case []any:
+				for _, item := range v {
+					if obj, ok := item.(map[string]any); ok {
+						filterObject(obj, nested)
+					}
+				}
+			}
 			continue
 		}
-		switch v := m[key].(type) {
-		case map[string]any:
-			filterObject(v, nested)
-		case []any:
-			for _, item := range v {
-				if obj, ok := item.(map[string]any); ok {
-					filterObject(obj, nested)
+		// Map-of-arrays (e.g. related_tasks: {"subtask": [...tasks]}).
+		if itemWhitelist, ok := mapOfArraysWhitelists[key]; ok {
+			if kindMap, ok := m[key].(map[string]any); ok {
+				for _, arr := range kindMap {
+					if items, ok := arr.([]any); ok {
+						for _, item := range items {
+							if obj, ok := item.(map[string]any); ok {
+								filterObject(obj, itemWhitelist)
+							}
+						}
+					}
 				}
 			}
 		}
