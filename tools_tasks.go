@@ -103,7 +103,7 @@ func registerTaskTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, taskFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -114,7 +114,7 @@ func registerTaskTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, taskFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -125,7 +125,7 @@ func registerTaskTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, taskFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -136,7 +136,7 @@ func registerTaskTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, taskFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -158,7 +158,7 @@ func registerTaskTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, taskFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -170,6 +170,6 @@ func registerTaskTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, taskFields), nil, nil
 	})
 }

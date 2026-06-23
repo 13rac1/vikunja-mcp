@@ -53,7 +53,7 @@ func registerTimeEntryTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, timeEntryFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -64,7 +64,7 @@ func registerTimeEntryTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, timeEntryFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -75,7 +75,7 @@ func registerTimeEntryTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, timeEntryFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -97,6 +97,6 @@ func registerTimeEntryTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, timeEntryFields), nil, nil
 	})
 }

@@ -28,7 +28,7 @@ func registerCommentTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, commentFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -40,6 +40,6 @@ func registerCommentTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, commentFields), nil, nil
 	})
 }

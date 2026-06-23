@@ -20,8 +20,12 @@ func registerResources(server *mcp.Server, client *Client) {
 		if err != nil {
 			return nil, err
 		}
+		filtered, err := filterJSON(raw, projectFields)
+		if err != nil {
+			return nil, fmt.Errorf("filtering response: %w", err)
+		}
 		return &mcp.ReadResourceResult{
-			Contents: []*mcp.ResourceContents{{URI: "vikunja://projects", Text: string(raw)}},
+			Contents: []*mcp.ResourceContents{{URI: "vikunja://projects", Text: string(filtered)}},
 		}, nil
 	})
 
@@ -44,8 +48,12 @@ func registerResources(server *mcp.Server, client *Client) {
 		if err != nil {
 			return nil, err
 		}
+		filtered, err := filterJSON(raw, projectFields)
+		if err != nil {
+			return nil, fmt.Errorf("filtering response: %w", err)
+		}
 		return &mcp.ReadResourceResult{
-			Contents: []*mcp.ResourceContents{{URI: req.Params.URI, Text: string(raw)}},
+			Contents: []*mcp.ResourceContents{{URI: req.Params.URI, Text: string(filtered)}},
 		}, nil
 	})
 
@@ -68,8 +76,12 @@ func registerResources(server *mcp.Server, client *Client) {
 		if err != nil {
 			return nil, err
 		}
+		filtered, err := filterJSON(raw, taskFields)
+		if err != nil {
+			return nil, fmt.Errorf("filtering response: %w", err)
+		}
 		return &mcp.ReadResourceResult{
-			Contents: []*mcp.ResourceContents{{URI: req.Params.URI, Text: string(raw)}},
+			Contents: []*mcp.ResourceContents{{URI: req.Params.URI, Text: string(filtered)}},
 		}, nil
 	})
 
@@ -92,8 +104,12 @@ func registerResources(server *mcp.Server, client *Client) {
 		if err != nil {
 			return nil, err
 		}
+		filtered, err := filterJSON(raw, taskFields)
+		if err != nil {
+			return nil, fmt.Errorf("filtering response: %w", err)
+		}
 		return &mcp.ReadResourceResult{
-			Contents: []*mcp.ResourceContents{{URI: req.Params.URI, Text: string(raw)}},
+			Contents: []*mcp.ResourceContents{{URI: req.Params.URI, Text: string(filtered)}},
 		}, nil
 	})
 }

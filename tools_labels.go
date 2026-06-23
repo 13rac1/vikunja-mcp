@@ -39,7 +39,7 @@ func registerLabelTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, labelFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -50,7 +50,7 @@ func registerLabelTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, labelFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -62,7 +62,7 @@ func registerLabelTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, labelFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{

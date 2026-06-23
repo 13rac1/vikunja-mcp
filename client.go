@@ -140,6 +140,115 @@ func appendQuery(path string, params url.Values) string {
 	return path + "?" + params.Encode()
 }
 
+// Field whitelists for response filtering. Only these fields are kept in tool responses.
+var userFields = map[string]bool{
+	"id": true, "username": true, "name": true,
+}
+
+var taskFields = map[string]bool{
+	"id": true, "title": true, "description": true, "done": true,
+	"done_at": true, "due_date": true, "project_id": true,
+	"priority": true, "start_date": true, "end_date": true,
+	"hex_color": true, "percent_done": true, "identifier": true,
+	"index": true, "repeat_after": true, "repeat_mode": true,
+	"assignees": true, "labels": true, "created_by": true,
+	"created": true, "updated": true,
+	"bucket_id": true, "is_favorite": true,
+}
+
+var projectFields = map[string]bool{
+	"id": true, "title": true, "description": true,
+	"identifier": true, "hex_color": true,
+	"parent_project_id": true, "is_archived": true,
+	"owner": true, "is_favorite": true,
+	"created": true, "updated": true,
+}
+
+var labelFields = map[string]bool{
+	"id": true, "title": true, "description": true,
+	"hex_color": true, "created_by": true,
+	"created": true, "updated": true,
+}
+
+var commentFields = map[string]bool{
+	"id": true, "comment": true, "author": true,
+	"created": true, "updated": true,
+}
+
+var timeEntryFields = map[string]bool{
+	"id": true, "task_id": true, "project_id": true,
+	"user_id": true, "start_time": true, "end_time": true,
+	"comment": true, "created": true, "updated": true,
+}
+
+// nestedWhitelists maps field names to whitelists for their nested objects.
+var nestedWhitelists = map[string]map[string]bool{
+	"created_by": userFields,
+	"owner":      userFields,
+	"author":     userFields,
+	"assignees":  userFields,
+	"labels":     labelFields,
+}
+
+// filterObject removes non-whitelisted keys from a map and filters nested objects.
+func filterObject(m map[string]any, whitelist map[string]bool) {
+	for key := range m {
+		if !whitelist[key] {
+			delete(m, key)
+			continue
+		}
+		nested, ok := nestedWhitelists[key]
+		if !ok {
+			continue
+		}
+		switch v := m[key].(type) {
+		case map[string]any:
+			filterObject(v, nested)
+		case []any:
+			for _, item := range v {
+				if obj, ok := item.(map[string]any); ok {
+					filterObject(obj, nested)
+				}
+			}
+		}
+	}
+}
+
+// filterJSON removes non-whitelisted fields from a JSON object or array of objects.
+func filterJSON(raw []byte, whitelist map[string]bool) ([]byte, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return raw, nil
+	}
+
+	if raw[0] == '[' {
+		var arr []map[string]any
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return nil, err
+		}
+		for _, obj := range arr {
+			filterObject(obj, whitelist)
+		}
+		return json.Marshal(arr)
+	}
+
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	filterObject(obj, whitelist)
+	return json.Marshal(obj)
+}
+
+// filteredResult filters raw JSON to whitelisted fields, then wraps as MCP text content.
+func filteredResult(raw []byte, whitelist map[string]bool) *mcp.CallToolResult {
+	filtered, err := filterJSON(raw, whitelist)
+	if err != nil {
+		return textResult(raw)
+	}
+	return textResult(filtered)
+}
+
 // textResult wraps raw JSON bytes as an MCP text content result.
 func textResult(raw []byte) *mcp.CallToolResult {
 	return &mcp.CallToolResult{

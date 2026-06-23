@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -681,6 +682,156 @@ func TestErrorResult(t *testing.T) {
 				t.Errorf("Text = %q, want %q", tc.Text, tt.wantMsg)
 			}
 		})
+	}
+}
+
+func TestFilterJSON(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		whitelist map[string]bool
+		want      string
+	}{
+		{
+			name:      "single object strips unknown fields",
+			input:     `{"id":1,"title":"test","position":42,"subscription":null}`,
+			whitelist: map[string]bool{"id": true, "title": true},
+			want:      `{"id":1,"title":"test"}`,
+		},
+		{
+			name:      "array of objects",
+			input:     `[{"id":1,"title":"a","junk":true},{"id":2,"title":"b","junk":false}]`,
+			whitelist: map[string]bool{"id": true, "title": true},
+			want:      `[{"id":1,"title":"a"},{"id":2,"title":"b"}]`,
+		},
+		{
+			name:      "empty array",
+			input:     `[]`,
+			whitelist: map[string]bool{"id": true},
+			want:      `[]`,
+		},
+		{
+			name:      "empty object",
+			input:     `{}`,
+			whitelist: map[string]bool{"id": true},
+			want:      `{}`,
+		},
+		{
+			name:      "empty input",
+			input:     ``,
+			whitelist: map[string]bool{"id": true},
+			want:      ``,
+		},
+		{
+			name:      "whitespace input",
+			input:     `  `,
+			whitelist: map[string]bool{"id": true},
+			want:      ``,
+		},
+		{
+			name:  "nested user object filtered",
+			input: `{"id":1,"title":"task","created_by":{"id":5,"username":"bob","email":"bob@test.com","created":"2024-01-01"}}`,
+			whitelist: map[string]bool{
+				"id": true, "title": true, "created_by": true,
+			},
+			want: `{"created_by":{"id":5,"username":"bob"},"id":1,"title":"task"}`,
+		},
+		{
+			name:  "nested array of users filtered",
+			input: `{"id":1,"assignees":[{"id":1,"username":"alice","email":"a@b.com"},{"id":2,"username":"bob","email":"c@d.com"}]}`,
+			whitelist: map[string]bool{
+				"id": true, "assignees": true,
+			},
+			want: `{"assignees":[{"id":1,"username":"alice"},{"id":2,"username":"bob"}],"id":1}`,
+		},
+		{
+			name:  "nested labels filtered",
+			input: `{"id":1,"labels":[{"id":10,"title":"bug","hex_color":"ff0000","created_by":{"id":1,"username":"admin","email":"a@b.com"},"created":"2024-01-01"}]}`,
+			whitelist: map[string]bool{
+				"id": true, "labels": true,
+			},
+			want: `{"id":1,"labels":[{"created":"2024-01-01","created_by":{"id":1,"username":"admin"},"hex_color":"ff0000","id":10,"title":"bug"}]}`,
+		},
+		{
+			name:      "null nested field preserved",
+			input:     `{"id":1,"created_by":null}`,
+			whitelist: map[string]bool{"id": true, "created_by": true},
+			want:      `{"created_by":null,"id":1}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := filterJSON([]byte(tt.input), tt.whitelist)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			// Normalize by re-marshaling expected JSON for comparison.
+			if tt.want == "" || tt.want == "[]" || tt.want == "{}" {
+				if string(got) != tt.want {
+					t.Errorf("got %q, want %q", string(got), tt.want)
+				}
+				return
+			}
+			// Compare as JSON to ignore key ordering.
+			var wantAny, gotAny any
+			if unmarshalErr := json.Unmarshal([]byte(tt.want), &wantAny); unmarshalErr != nil {
+				t.Fatalf("invalid want JSON: %v", unmarshalErr)
+			}
+			if unmarshalErr := json.Unmarshal(got, &gotAny); unmarshalErr != nil {
+				t.Fatalf("invalid got JSON: %v", unmarshalErr)
+			}
+			wantBytes, marshalErr := json.Marshal(wantAny)
+			if marshalErr != nil {
+				t.Fatalf("marshaling want: %v", marshalErr)
+			}
+			gotBytes, marshalErr := json.Marshal(gotAny)
+			if marshalErr != nil {
+				t.Fatalf("marshaling got: %v", marshalErr)
+			}
+			if !bytes.Equal(gotBytes, wantBytes) {
+				t.Errorf("got  %s\nwant %s", string(gotBytes), string(wantBytes))
+			}
+		})
+	}
+}
+
+func TestFilterJSON_InvalidJSON(t *testing.T) {
+	_, err := filterJSON([]byte(`{not json`), taskFields)
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestFilteredResult(t *testing.T) {
+	raw := []byte(`{"id":1,"title":"test","position":42,"subscription":null}`)
+	r := filteredResult(raw, map[string]bool{"id": true, "title": true})
+	if r.IsError {
+		t.Error("expected IsError=false")
+	}
+	tc, ok := r.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected *mcp.TextContent, got %T", r.Content[0])
+	}
+	if containsSubstring(tc.Text, "position") {
+		t.Errorf("filtered result should not contain 'position': %s", tc.Text)
+	}
+	if !containsSubstring(tc.Text, `"id":1`) {
+		t.Errorf("filtered result should contain id: %s", tc.Text)
+	}
+}
+
+func TestFilteredResult_FallbackOnInvalidJSON(t *testing.T) {
+	raw := []byte(`{invalid}`)
+	r := filteredResult(raw, taskFields)
+	if r.IsError {
+		t.Error("expected IsError=false (fallback to unfiltered)")
+	}
+	tc, ok := r.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected *mcp.TextContent, got %T", r.Content[0])
+	}
+	if tc.Text != string(raw) {
+		t.Errorf("expected fallback to raw, got %q", tc.Text)
 	}
 }
 

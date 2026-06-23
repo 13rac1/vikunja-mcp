@@ -35,7 +35,7 @@ func registerProjectTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, projectFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -46,7 +46,7 @@ func registerProjectTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, projectFields), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -57,6 +57,6 @@ func registerProjectTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return textResult(raw), nil, nil
+		return filteredResult(raw, projectFields), nil, nil
 	})
 }
