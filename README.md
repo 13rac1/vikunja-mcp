@@ -43,13 +43,15 @@ curl -s -X POST https://vikunja.example.com/api/v2/tokens \
     "title": "vikunja-mcp",
     "expires_at": "2099-01-01T00:00:00Z",
     "permissions": {
-      "projects":        ["read_all", "read_one", "create"],
+      "projects":        ["read_all", "read_one", "create", "update", "delete", "views_buckets_tasks", "views_buckets_tasks_get"],
       "tasks":           ["read_all", "read_one", "create", "update", "delete"],
-      "labels":          ["read_all", "create"],
+      "labels":          ["read_all", "create", "delete"],
       "tasks_labels":    ["create", "delete"],
       "tasks_comments":  ["read_all", "create"],
       "tasks_assignees": ["create", "delete"],
-      "time-entries":    ["read_all", "read_one", "create", "update", "delete"]
+      "tasks_relations": ["create", "delete"],
+      "time-entries":    ["read_all", "read_one", "create", "update", "delete"],
+      "projects_views":  ["read_all", "read_one", "create", "update", "delete"]
     }
   }' | jq .token
 ```
@@ -96,12 +98,14 @@ The MCP endpoint will be available at `http://localhost:8080/mcp`.
 - `list_projects` — list all projects (search, pagination)
 - `get_project` — get project by ID
 - `create_project` — create a new project
+- `update_project` — update project fields (partial update)
+- `delete_project` — delete a project
 
 ### Tasks
 - `list_tasks` — list tasks across all projects or within a specific project (filter, sort, search, pagination)
-- `get_task` — get task by ID
-- `create_task` — create a task in a project
-- `update_task` — update task fields (partial update)
+- `get_task` — get task by ID (includes relations and reminders)
+- `create_task` — create a task in a project (supports reminders)
+- `update_task` — update task fields (partial update, supports reminders)
 - `delete_task` — delete a task
 - `complete_task` — mark a task as done
 - `search_tasks` — search tasks by query string with optional filters
@@ -109,6 +113,7 @@ The MCP endpoint will be available at `http://localhost:8080/mcp`.
 ### Labels
 - `list_labels` — list all labels
 - `create_label` — create a label
+- `delete_label` — delete a label
 - `add_label_to_task` — add label to task
 - `remove_label_from_task` — remove label from task
 
@@ -119,6 +124,33 @@ The MCP endpoint will be available at `http://localhost:8080/mcp`.
 ### Assignees
 - `add_assignee` — assign user to task
 - `remove_assignee` — unassign user from task
+
+### Relations
+- `create_task_relation` — create a relation between tasks (subtask, blocking, related, etc.)
+- `delete_task_relation` — delete a task relation
+
+### Views & Kanban
+- `list_views` — list all views for a project (list, kanban, gantt, table)
+- `create_view` — create a new view for a project
+- `update_view` — update a view's fields
+- `delete_view` — delete a view
+- `list_buckets` — list buckets and their tasks for a kanban view
+- `move_task_to_bucket` — move a task to a different bucket
+
+### Power Queries
+- `overdue_tasks` — list tasks past their due date
+- `due_today` — list tasks due today
+- `due_this_week` — list tasks due within 7 days
+- `high_priority_tasks` — list open tasks with priority 3+ (high)
+- `urgent_tasks` — list open tasks with priority 4+ (urgent)
+- `focus_now` — list tasks needing immediate attention (urgent or overdue)
+- `unscheduled_tasks` — list open tasks with no due date
+- `upcoming_deadlines` — list tasks due within N days (default 7)
+- `task_summary` — get counts of overdue, due today, high priority, and total open tasks
+
+### Batch Operations
+- `batch_create_tasks` — create multiple tasks in a single project
+- `batch_update_tasks` — update multiple tasks at once
 
 ### Time Entries
 - `list_time_entries` — list time entries (filterable by date, project, task)
