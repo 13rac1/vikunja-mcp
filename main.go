@@ -42,6 +42,7 @@ func main() {
 	registerAssigneeTools(server, client)
 	registerTimeEntryTools(server, client)
 	registerResources(server, client)
+	server.AddReceivingMiddleware(errorLoggingMiddleware)
 
 	if *httpAddr != "" {
 		handler := mcp.NewStreamableHTTPHandler(

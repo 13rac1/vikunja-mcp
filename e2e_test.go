@@ -356,6 +356,30 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 		t.Errorf("fetched title = %q, want %q", fetched["title"], "E2E Updated Task")
 	}
 
+	// List projects — must return items array with our project.
+	projectList := callTool(t, "list_projects", nil)
+	t.Logf("list_projects response: %v", projectList)
+	projectItems, ok := projectList["items"].([]any)
+	if !ok {
+		t.Fatalf("list_projects: expected items array, got %T (full response: %v)", projectList["items"], projectList)
+	}
+	if len(projectItems) == 0 {
+		t.Fatal("list_projects: items array is empty")
+	}
+
+	// List tasks — must return items array with our task.
+	taskList := callTool(t, "list_tasks", map[string]any{
+		"project_id": projectID,
+	})
+	t.Logf("list_tasks response: %v", taskList)
+	taskItems, ok := taskList["items"].([]any)
+	if !ok {
+		t.Fatalf("list_tasks: expected items array, got %T (full response: %v)", taskList["items"], taskList)
+	}
+	if len(taskItems) == 0 {
+		t.Fatal("list_tasks: items array is empty")
+	}
+
 	// Delete task.
 	deleteText := callToolText(t, "delete_task", map[string]any{
 		"id": taskID,

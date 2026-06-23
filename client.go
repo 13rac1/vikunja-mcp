@@ -214,7 +214,15 @@ func filterObject(m map[string]any, whitelist map[string]bool) {
 	}
 }
 
+// paginationFields are the envelope keys from Vikunja v2's Paginated[T] type.
+var paginationFields = map[string]bool{
+	"items": true, "total": true, "page": true,
+	"per_page": true, "total_pages": true,
+}
+
 // filterJSON removes non-whitelisted fields from a JSON object or array of objects.
+// Handles the v2 Paginated envelope: if the object has an "items" array, each item
+// is filtered and only pagination metadata is kept at the top level.
 func filterJSON(raw []byte, whitelist map[string]bool) ([]byte, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
@@ -236,6 +244,24 @@ func filterJSON(raw []byte, whitelist map[string]bool) ([]byte, error) {
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, err
 	}
+
+	// Detect paginated envelope: has "items" array.
+	if items, ok := obj["items"]; ok {
+		if arr, ok := items.([]any); ok {
+			for _, item := range arr {
+				if m, ok := item.(map[string]any); ok {
+					filterObject(m, whitelist)
+				}
+			}
+			for key := range obj {
+				if !paginationFields[key] {
+					delete(obj, key)
+				}
+			}
+			return json.Marshal(obj)
+		}
+	}
+
 	filterObject(obj, whitelist)
 	return json.Marshal(obj)
 }
@@ -247,6 +273,38 @@ func filteredResult(raw []byte, whitelist map[string]bool) *mcp.CallToolResult {
 		return textResult(raw)
 	}
 	return textResult(filtered)
+}
+
+// errorLoggingMiddleware logs tool call errors to the MCP client via notifications/message.
+func errorLoggingMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		result, err := next(ctx, method, req)
+		if err != nil {
+			return result, err
+		}
+		toolResult, ok := result.(*mcp.CallToolResult)
+		if !ok || !toolResult.IsError {
+			return result, nil
+		}
+		ss, ok := req.GetSession().(*mcp.ServerSession)
+		if !ok {
+			return result, nil
+		}
+		var msg string
+		if len(toolResult.Content) > 0 {
+			if tc, ok := toolResult.Content[0].(*mcp.TextContent); ok {
+				msg = tc.Text
+			}
+		}
+		if logErr := ss.Log(ctx, &mcp.LoggingMessageParams{
+			Logger: "vikunja-mcp",
+			Level:  "error",
+			Data:   map[string]string{"method": method, "error": msg},
+		}); logErr != nil {
+			return result, fmt.Errorf("logging error: %w", logErr)
+		}
+		return result, nil
+	}
 }
 
 // textResult wraps raw JSON bytes as an MCP text content result.

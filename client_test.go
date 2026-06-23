@@ -758,6 +758,18 @@ func TestFilterJSON(t *testing.T) {
 			whitelist: map[string]bool{"id": true, "created_by": true},
 			want:      `{"created_by":null,"id":1}`,
 		},
+		{
+			name:      "paginated envelope filters items and keeps metadata",
+			input:     `{"items":[{"id":1,"title":"a","position":0},{"id":2,"title":"b","position":1}],"total":2,"page":1,"per_page":50,"total_pages":1,"extra":"dropped"}`,
+			whitelist: map[string]bool{"id": true, "title": true},
+			want:      `{"items":[{"id":1,"title":"a"},{"id":2,"title":"b"}],"total":2,"page":1,"per_page":50,"total_pages":1}`,
+		},
+		{
+			name:      "paginated envelope with empty items",
+			input:     `{"items":[],"total":0,"page":1,"per_page":50,"total_pages":0}`,
+			whitelist: map[string]bool{"id": true},
+			want:      `{"items":[],"total":0,"page":1,"per_page":50,"total_pages":0}`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
