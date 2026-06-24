@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,15 +129,15 @@ func setupAuth(ctx context.Context, baseURL string) (string, error) {
 	tokenBody := map[string]any{
 		"title": "e2e-mcp",
 		"permissions": map[string][]string{
-			"projects":         {"read_all", "read_one", "create", "update", "delete", "views_buckets_tasks", "views_buckets_tasks_get"},
-			"tasks":            {"read_all", "read_one", "create", "update", "delete"},
-			"labels":           {"read_all", "create", "delete"},
-			"tasks_labels":     {"create", "delete"},
-			"tasks_comments":   {"read_all", "create"},
-			"tasks_assignees":  {"create", "delete"},
-			"tasks_relations":  {"create", "delete"},
-			"time-entries":     {"read_all", "read_one", "create", "update", "delete"},
-			"projects_views":   {"read_all", "read_one", "create", "update", "delete"},
+			"projects":        {"read_all", "read_one", "create", "update", "delete", "views_buckets_tasks", "views_buckets_tasks_get"},
+			"tasks":           {"read_all", "read_one", "create", "update", "delete"},
+			"labels":          {"read_all", "create", "delete"},
+			"tasks_labels":    {"create", "delete"},
+			"tasks_comments":  {"read_all", "create"},
+			"tasks_assignees": {"create", "delete"},
+			"tasks_relations": {"create", "delete"},
+			"time-entries":    {"read_all", "read_one", "create", "update", "delete"},
+			"projects_views":  {"read_all", "read_one", "create", "update", "delete"},
 		},
 		"expires_at": "2099-01-01T00:00:00Z",
 	}
@@ -488,29 +489,29 @@ func TestE2E_PowerQueries(t *testing.T) {
 
 	// Test overdue_tasks.
 	overdue := callTool(t, "overdue_tasks", map[string]any{"project_id": projectID})
-	overdueItems := overdue["items"].([]any)
-	if len(overdueItems) == 0 {
+	overdueItems, ok := overdue["items"].([]any)
+	if !ok || len(overdueItems) == 0 {
 		t.Error("overdue_tasks: expected at least 1 result")
 	}
 
 	// Test high_priority_tasks.
 	highPri := callTool(t, "high_priority_tasks", map[string]any{"project_id": projectID})
-	highPriItems := highPri["items"].([]any)
-	if len(highPriItems) < 2 {
+	highPriItems, ok := highPri["items"].([]any)
+	if !ok || len(highPriItems) < 2 {
 		t.Errorf("high_priority_tasks: expected >= 2 results, got %d", len(highPriItems))
 	}
 
 	// Test urgent_tasks (priority >= 4).
 	urgent := callTool(t, "urgent_tasks", map[string]any{"project_id": projectID})
-	urgentItems := urgent["items"].([]any)
-	if len(urgentItems) < 1 {
+	urgentItems, ok := urgent["items"].([]any)
+	if !ok || len(urgentItems) < 1 {
 		t.Errorf("urgent_tasks: expected >= 1, got %d", len(urgentItems))
 	}
 
 	// Test focus_now (overdue or urgent).
 	focus := callTool(t, "focus_now", map[string]any{"project_id": projectID})
-	focusItems := focus["items"].([]any)
-	if len(focusItems) < 2 {
+	focusItems, ok := focus["items"].([]any)
+	if !ok || len(focusItems) < 2 {
 		t.Errorf("focus_now: expected >= 2, got %d", len(focusItems))
 	}
 
@@ -523,18 +524,20 @@ func TestE2E_PowerQueries(t *testing.T) {
 		"project_id": projectID,
 		"days":       50000,
 	})
-	upcomingWideItems := upcomingWide["items"].([]any)
-	if len(upcomingWideItems) == 0 {
+	upcomingWideItems, ok := upcomingWide["items"].([]any)
+	if !ok || len(upcomingWideItems) == 0 {
 		t.Error("upcoming_deadlines(50000d): expected at least 1 result")
 	}
 
 	// Test task_summary.
 	summary := callTool(t, "task_summary", map[string]any{"project_id": projectID})
 	t.Logf("task_summary: %v", summary)
-	if summary["total_open"] == nil || summary["total_open"].(float64) < 3 {
+	totalOpen, totalOK := summary["total_open"].(float64)
+	if !totalOK || totalOpen < 3 {
 		t.Errorf("task_summary total_open: expected >= 3, got %v", summary["total_open"])
 	}
-	if summary["overdue"] == nil || summary["overdue"].(float64) < 1 {
+	overdueCount, overdueOK := summary["overdue"].(float64)
+	if !overdueOK || overdueCount < 1 {
 		t.Errorf("task_summary overdue: expected >= 1, got %v", summary["overdue"])
 	}
 }
@@ -577,9 +580,9 @@ func TestE2E_TaskRelations(t *testing.T) {
 
 	// Delete relation.
 	deleteText := callToolText(t, "delete_task_relation", map[string]any{
-		"task_id":        parentID,
-		"relation_kind":  "subtask",
-		"other_task_id":  childID,
+		"task_id":       parentID,
+		"relation_kind": "subtask",
+		"other_task_id": childID,
 	})
 	if deleteText != "deleted" {
 		t.Errorf("delete relation result = %q, want %q", deleteText, "deleted")
@@ -697,7 +700,9 @@ func TestE2E_Views(t *testing.T) {
 	var firstBucketID int64
 	if ok && len(bucketItems) > 0 {
 		if b, ok := bucketItems[0].(map[string]any); ok {
-			firstBucketID = int64(b["id"].(float64))
+			if idVal, ok := b["id"].(float64); ok {
+				firstBucketID = int64(idVal)
+			}
 		}
 	}
 	t.Logf("first bucket id=%d", firstBucketID)
@@ -750,7 +755,8 @@ func TestE2E_BatchOperations(t *testing.T) {
 	text := toolText(t, "batch_create_tasks", result)
 
 	var created []map[string]any
-	if err := json.Unmarshal([]byte(text), &created); err != nil {
+	err = json.Unmarshal([]byte(text), &created)
+	if err != nil {
 		t.Fatalf("unmarshal batch result: %v\nraw: %s", err, text)
 	}
 	if len(created) != 3 {
@@ -865,5 +871,34 @@ func TestE2E_Resources(t *testing.T) {
 	}
 	if taskRes["title"] != "Resource Test Task" {
 		t.Errorf("task title = %v, want %q", taskRes["title"], "Resource Test Task")
+	}
+}
+
+// TestE2E_GlobalTaskList verifies that list_tasks without a project_id works.
+// Currently expected to fail: Vikunja's CanDoAPIRoute has a bug where both
+// GET /api/v2/tasks and GET /api/v2/projects/:project/tasks normalise to the
+// same tasks.read_all map key, but only the project-scoped RouteDetail
+// survives — the global endpoint gets a 401.
+// Tracked in: https://github.com/go-vikunja/vikunja/issues/XXXX
+func TestE2E_GlobalTaskList(t *testing.T) {
+	result, err := testSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "list_tasks",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(list_tasks): %v", err)
+	}
+
+	// TODO: flip to !result.IsError once the Vikunja fix is deployed.
+	if !result.IsError {
+		t.Fatal("expected list_tasks without project_id to fail with 401 (Vikunja bug), but it succeeded — remove this expected-failure test")
+	}
+
+	tc, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(tc.Text, "401") {
+		t.Errorf("expected 401 in error text, got: %s", tc.Text)
 	}
 }
