@@ -40,7 +40,8 @@ func main() {
 	registerLabelTools(server, client)
 	registerCommentTools(server, client)
 	registerAssigneeTools(server, client)
-	registerTimeEntryTools(server, client)
+	// Time entry tools require a Vikunja license (time tracking feature).
+	// They are not registered here because most instances won't have it.
 	registerPowerQueryTools(server, client)
 	registerRelationTools(server, client)
 	registerViewTools(server, client)

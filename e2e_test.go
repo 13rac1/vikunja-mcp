@@ -24,6 +24,11 @@ const (
 )
 
 var testSession *mcp.ClientSession
+var restrictedSession *mcp.ClientSession
+var badTokenSession *mcp.ClientSession
+
+// jwt is the user's login JWT, stored for creating additional API tokens.
+var jwt string
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -39,13 +44,21 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	token, err := setupAuth(ctx, vikunjaURL)
+	var err error
+	jwt, err = registerAndLogin(ctx, vikunjaURL)
 	if err != nil {
 		composeDown(context.Background())
 		fmt.Fprintf(os.Stderr, "auth setup: %v\n", err)
 		os.Exit(1)
 	}
 
+	// Full-permission session.
+	token, err := createAPIToken(ctx, vikunjaURL, jwt, "e2e-full", fullPermissions)
+	if err != nil {
+		composeDown(context.Background())
+		fmt.Fprintf(os.Stderr, "create full token: %v\n", err)
+		os.Exit(1)
+	}
 	session, cleanup, err := setupMCP(ctx, vikunjaURL, token)
 	if err != nil {
 		composeDown(context.Background())
@@ -54,8 +67,40 @@ func TestMain(m *testing.M) {
 	}
 	testSession = session
 
+	// Restricted session (read-only projects, nothing else).
+	restrictedToken, err := createAPIToken(ctx, vikunjaURL, jwt, "e2e-restricted", map[string][]string{
+		"projects": {"read_all"},
+	})
+	if err != nil {
+		cleanup()
+		composeDown(context.Background())
+		fmt.Fprintf(os.Stderr, "create restricted token: %v\n", err)
+		os.Exit(1)
+	}
+	rSession, rCleanup, err := setupMCP(ctx, vikunjaURL, restrictedToken)
+	if err != nil {
+		cleanup()
+		composeDown(context.Background())
+		fmt.Fprintf(os.Stderr, "restricted mcp setup: %v\n", err)
+		os.Exit(1)
+	}
+	restrictedSession = rSession
+
+	// Bad-token session (invalid token string).
+	bSession, bCleanup, err := setupMCP(ctx, vikunjaURL, "invalid-token-xxx")
+	if err != nil {
+		rCleanup()
+		cleanup()
+		composeDown(context.Background())
+		fmt.Fprintf(os.Stderr, "bad token mcp setup: %v\n", err)
+		os.Exit(1)
+	}
+	badTokenSession = bSession
+
 	code := m.Run()
 
+	bCleanup()
+	rCleanup()
 	cleanup()
 	composeDown(context.Background())
 	os.Exit(code)
@@ -99,18 +144,17 @@ func waitForHealthy(ctx context.Context, healthURL string, timeout time.Duration
 	return fmt.Errorf("timed out after %s waiting for %s", timeout, healthURL)
 }
 
-func setupAuth(ctx context.Context, baseURL string) (string, error) {
-	// Register a user.
+// registerAndLogin creates a test user and returns a JWT.
+// Safe to call multiple times — registration is idempotent (second call returns an error we ignore).
+func registerAndLogin(ctx context.Context, baseURL string) (string, error) {
 	regBody := map[string]string{
 		"username": "e2etest",
 		"password": "e2etestpass",
 		"email":    "e2e@test.local",
 	}
-	if err := postJSON(ctx, baseURL+"/api/v1/register", "", regBody, nil); err != nil {
-		return "", fmt.Errorf("register: %w", err)
-	}
+	// Ignore error: user may already exist from a previous call.
+	_ = postJSON(ctx, baseURL+"/api/v1/register", "", regBody, nil) //nolint:errcheck // idempotent registration
 
-	// Login to get a JWT.
 	loginBody := map[string]string{
 		"username": "e2etest",
 		"password": "e2etestpass",
@@ -124,33 +168,38 @@ func setupAuth(ctx context.Context, baseURL string) (string, error) {
 	if loginResp.Token == "" {
 		return "", fmt.Errorf("login returned empty token")
 	}
+	return loginResp.Token, nil
+}
 
-	// Create a scoped API token using the JWT.
+// createAPIToken creates a scoped API token with the given permissions using a JWT.
+func createAPIToken(ctx context.Context, baseURL, jwtToken, title string, permissions map[string][]string) (string, error) {
 	tokenBody := map[string]any{
-		"title": "e2e-mcp",
-		"permissions": map[string][]string{
-			"projects":        {"read_all", "read_one", "create", "update", "delete", "views_buckets_tasks", "views_buckets_tasks_get"},
-			"tasks":           {"read_all", "read_one", "create", "update", "delete"},
-			"labels":          {"read_all", "create", "delete"},
-			"tasks_labels":    {"create", "delete"},
-			"tasks_comments":  {"read_all", "create"},
-			"tasks_assignees": {"create", "delete"},
-			"tasks_relations": {"create", "delete"},
-			"time-entries":    {"read_all", "read_one", "create", "update", "delete"},
-			"projects_views":  {"read_all", "read_one", "create", "update", "delete"},
-		},
-		"expires_at": "2099-01-01T00:00:00Z",
+		"title":       title,
+		"permissions": permissions,
+		"expires_at":  "2099-01-01T00:00:00Z",
 	}
 	var tokenResp struct {
 		Token string `json:"token"`
 	}
-	if err := postJSON(ctx, baseURL+"/api/v2/tokens", loginResp.Token, tokenBody, &tokenResp); err != nil {
-		return "", fmt.Errorf("create api token: %w", err)
+	if err := postJSON(ctx, baseURL+"/api/v2/tokens", jwtToken, tokenBody, &tokenResp); err != nil {
+		return "", fmt.Errorf("create api token %q: %w", title, err)
 	}
 	if tokenResp.Token == "" {
-		return "", fmt.Errorf("api token creation returned empty token")
+		return "", fmt.Errorf("api token %q creation returned empty token", title)
 	}
 	return tokenResp.Token, nil
+}
+
+// fullPermissions returns the complete set of API token permissions for all MCP tools.
+var fullPermissions = map[string][]string{
+	"projects":        {"read_all", "read_one", "create", "update", "delete", "views_buckets_tasks", "views_buckets_tasks_get"},
+	"tasks":           {"read_all", "read_one", "create", "update", "delete"},
+	"labels":          {"read_all", "create", "delete"},
+	"tasks_labels":    {"create", "delete"},
+	"tasks_comments":  {"read_all", "create"},
+	"tasks_assignees": {"create", "delete"},
+	"tasks_relations": {"create", "delete"},
+	"projects_views":  {"read_all", "read_one", "create", "update", "delete"},
 }
 
 // postJSON sends a JSON POST request. If authToken is non-empty, it's sent as a Bearer token.
@@ -193,7 +242,6 @@ func setupMCP(ctx context.Context, vikunjaBaseURL, token string) (*mcp.ClientSes
 	registerLabelTools(server, apiClient)
 	registerCommentTools(server, apiClient)
 	registerAssigneeTools(server, apiClient)
-	registerTimeEntryTools(server, apiClient)
 	registerPowerQueryTools(server, apiClient)
 	registerRelationTools(server, apiClient)
 	registerViewTools(server, apiClient)
@@ -439,18 +487,72 @@ func TestE2E_ProjectCRUD(t *testing.T) {
 	}
 }
 
-func TestE2E_LabelDelete(t *testing.T) {
-	// Create.
+func TestE2E_LabelLifecycle(t *testing.T) {
+	// Create label.
 	label := callTool(t, "create_label", map[string]any{
-		"title":     "ephemeral-label",
-		"hex_color": "aabbcc",
+		"title":     "lifecycle-label",
+		"hex_color": "ff5500",
 	})
 	labelID := jsonID(t, label)
-	if label["title"] != "ephemeral-label" {
-		t.Errorf("title = %v, want ephemeral-label", label["title"])
+	if label["title"] != "lifecycle-label" {
+		t.Errorf("title = %v, want lifecycle-label", label["title"])
 	}
 
-	// Delete.
+	// List labels — verify it appears.
+	labels := callTool(t, "list_labels", nil)
+	labelItems, ok := labels["items"].([]any)
+	if !ok || len(labelItems) == 0 {
+		t.Fatal("list_labels: expected at least 1 label")
+	}
+	found := false
+	for _, item := range labelItems {
+		m, mOK := item.(map[string]any)
+		if !mOK {
+			continue
+		}
+		if id, idOK := m["id"].(float64); idOK && int64(id) == labelID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("list_labels: label id=%d not found in results", labelID)
+	}
+
+	// Create a project + task to attach the label to.
+	project := callTool(t, "create_project", map[string]any{"title": "Label Test Project"})
+	projectID := jsonID(t, project)
+	task := callTool(t, "create_task", map[string]any{
+		"project_id": projectID,
+		"title":      "Label Test Task",
+	})
+	taskID := jsonID(t, task)
+
+	// Add label to task.
+	callTool(t, "add_label_to_task", map[string]any{
+		"task_id":  taskID,
+		"label_id": labelID,
+	})
+
+	// Verify label appears on task.
+	fetched := callTool(t, "get_task", map[string]any{"id": taskID})
+	taskLabels, ok := fetched["labels"].([]any)
+	if !ok || len(taskLabels) == 0 {
+		t.Fatal("expected labels array on task after adding label")
+	}
+
+	// Remove label from task.
+	callToolText(t, "remove_label_from_task", map[string]any{
+		"task_id":  taskID,
+		"label_id": labelID,
+	})
+
+	// Verify label is gone from task.
+	fetchedAfter := callTool(t, "get_task", map[string]any{"id": taskID})
+	if afterLabels, ok := fetchedAfter["labels"].([]any); ok && len(afterLabels) > 0 {
+		t.Error("expected no labels on task after removal")
+	}
+
+	// Delete label.
 	deleteText := callToolText(t, "delete_label", map[string]any{"id": labelID})
 	if deleteText != "deleted" {
 		t.Errorf("delete result = %q, want %q", deleteText, "deleted")
@@ -874,12 +976,234 @@ func TestE2E_Resources(t *testing.T) {
 	}
 }
 
+func TestE2E_Comments(t *testing.T) {
+	project := callTool(t, "create_project", map[string]any{"title": "Comment Test Project"})
+	projectID := jsonID(t, project)
+	task := callTool(t, "create_task", map[string]any{
+		"project_id": projectID,
+		"title":      "Comment Test Task",
+	})
+	taskID := jsonID(t, task)
+
+	// Add first comment.
+	comment1 := callTool(t, "add_comment", map[string]any{
+		"task_id": taskID,
+		"comment": "First comment",
+	})
+	if comment1["comment"] != "First comment" {
+		t.Errorf("comment1 text = %v, want %q", comment1["comment"], "First comment")
+	}
+
+	// Add second comment.
+	callTool(t, "add_comment", map[string]any{
+		"task_id": taskID,
+		"comment": "Second comment",
+	})
+
+	// List comments — expect both.
+	comments := callTool(t, "list_comments", map[string]any{"task_id": taskID})
+	commentItems, ok := comments["items"].([]any)
+	if !ok || len(commentItems) < 2 {
+		t.Fatalf("list_comments: expected >= 2 comments, got %d", len(commentItems))
+	}
+
+	// Verify author is present on first comment.
+	if c, ok := commentItems[0].(map[string]any); ok {
+		if _, hasAuthor := c["author"]; !hasAuthor {
+			t.Error("comment missing author field")
+		}
+	}
+}
+
+func TestE2E_Assignees(t *testing.T) {
+	project := callTool(t, "create_project", map[string]any{"title": "Assignee Test Project"})
+	projectID := jsonID(t, project)
+	task := callTool(t, "create_task", map[string]any{
+		"project_id": projectID,
+		"title":      "Assignee Test Task",
+	})
+	taskID := jsonID(t, task)
+
+	// Assign user_id 1 (the e2etest user).
+	callTool(t, "add_assignee", map[string]any{
+		"task_id": taskID,
+		"user_id": 1,
+	})
+
+	// Verify assignee appears on task.
+	fetched := callTool(t, "get_task", map[string]any{"id": taskID})
+	assignees, ok := fetched["assignees"].([]any)
+	if !ok || len(assignees) == 0 {
+		t.Fatal("expected assignees array after adding assignee")
+	}
+	if user, ok := assignees[0].(map[string]any); ok {
+		if user["username"] != "e2etest" {
+			t.Errorf("assignee username = %v, want %q", user["username"], "e2etest")
+		}
+	}
+
+	// Remove assignee.
+	callToolText(t, "remove_assignee", map[string]any{
+		"task_id": taskID,
+		"user_id": 1,
+	})
+
+	// Verify assignee is gone.
+	fetchedAfter := callTool(t, "get_task", map[string]any{"id": taskID})
+	if after, ok := fetchedAfter["assignees"].([]any); ok && len(after) > 0 {
+		t.Error("expected no assignees after removal")
+	}
+}
+
+func TestE2E_SearchTasks(t *testing.T) {
+	project := callTool(t, "create_project", map[string]any{"title": "Search Test Project"})
+	projectID := jsonID(t, project)
+
+	callTool(t, "create_task", map[string]any{
+		"project_id": projectID,
+		"title":      "Alpha Unique Task",
+	})
+	callTool(t, "create_task", map[string]any{
+		"project_id": projectID,
+		"title":      "Beta Unique Task",
+	})
+
+	// Search for "Alpha" — should find exactly 1.
+	alpha := callTool(t, "search_tasks", map[string]any{"query": "Alpha"})
+	alphaItems, ok := alpha["items"].([]any)
+	if !ok {
+		t.Fatal("search_tasks(Alpha): expected items array")
+	}
+	if len(alphaItems) != 1 {
+		t.Errorf("search_tasks(Alpha): expected 1 result, got %d", len(alphaItems))
+	}
+
+	// Search for "Unique" — should find both.
+	unique := callTool(t, "search_tasks", map[string]any{"query": "Unique"})
+	uniqueItems, ok := unique["items"].([]any)
+	if !ok {
+		t.Fatal("search_tasks(Unique): expected items array")
+	}
+	if len(uniqueItems) < 2 {
+		t.Errorf("search_tasks(Unique): expected >= 2 results, got %d", len(uniqueItems))
+	}
+}
+
+func TestE2E_PowerQueries_Extra(t *testing.T) {
+	project := callTool(t, "create_project", map[string]any{"title": "PQ Extra Project"})
+	projectID := jsonID(t, project)
+
+	// Task due today.
+	today := time.Now().Format("2006-01-02") + "T23:59:59Z"
+	callTool(t, "create_task", map[string]any{
+		"project_id": projectID,
+		"title":      "Due Today Task",
+		"due_date":   today,
+	})
+
+	// Task due in 3 days.
+	threeDays := time.Now().Add(3*24*time.Hour).Format("2006-01-02") + "T12:00:00Z"
+	callTool(t, "create_task", map[string]any{
+		"project_id": projectID,
+		"title":      "Due In 3 Days",
+		"due_date":   threeDays,
+	})
+
+	// Task with no due date.
+	callTool(t, "create_task", map[string]any{
+		"project_id": projectID,
+		"title":      "No Due Date Task",
+	})
+
+	// due_today — should include the today task.
+	dueToday := callTool(t, "due_today", map[string]any{"project_id": projectID})
+	dueTodayItems, ok := dueToday["items"].([]any)
+	if !ok || len(dueTodayItems) == 0 {
+		t.Error("due_today: expected at least 1 result")
+	}
+
+	// due_this_week — should include today and 3-day tasks.
+	dueWeek := callTool(t, "due_this_week", map[string]any{"project_id": projectID})
+	dueWeekItems, ok := dueWeek["items"].([]any)
+	if !ok || len(dueWeekItems) < 2 {
+		t.Errorf("due_this_week: expected >= 2 results, got %d", len(dueWeekItems))
+	}
+
+	// unscheduled_tasks — should include the no-due-date task.
+	unscheduled := callTool(t, "unscheduled_tasks", map[string]any{"project_id": projectID})
+	unschedItems, ok := unscheduled["items"].([]any)
+	if !ok || len(unschedItems) == 0 {
+		t.Error("unscheduled_tasks: expected at least 1 result")
+	}
+}
+
+func TestE2E_ErrorPaths(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("401 invalid token", func(t *testing.T) {
+		result, err := badTokenSession.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "list_projects",
+			Arguments: map[string]any{},
+		})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if !result.IsError {
+			t.Fatal("expected error result for invalid token")
+		}
+		tc, ok := result.Content[0].(*mcp.TextContent)
+		if !ok {
+			t.Fatalf("expected text content, got %T", result.Content[0])
+		}
+		if !strings.Contains(tc.Text, "401") {
+			t.Errorf("expected 401 in error, got: %s", tc.Text)
+		}
+		if !strings.Contains(tc.Text, "VIKUNJA_TOKEN") {
+			t.Errorf("expected guidance about VIKUNJA_TOKEN, got: %s", tc.Text)
+		}
+	})
+
+	t.Run("missing permission", func(t *testing.T) {
+		// Restricted session only has projects.read_all — creating a task should fail.
+		// Vikunja returns 401 (token not authorised for this route) rather than
+		// 403 when the token lacks the permission group entirely.
+		result, err := restrictedSession.CallTool(ctx, &mcp.CallToolParams{
+			Name: "create_task",
+			Arguments: map[string]any{
+				"project_id": 1,
+				"title":      "should fail",
+			},
+		})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if !result.IsError {
+			t.Fatal("expected error result for missing permission")
+		}
+		tc, ok := result.Content[0].(*mcp.TextContent)
+		if !ok {
+			t.Fatalf("expected text content, got %T", result.Content[0])
+		}
+		if !strings.Contains(tc.Text, "401") && !strings.Contains(tc.Text, "403") {
+			t.Errorf("expected 401 or 403 in error, got: %s", tc.Text)
+		}
+	})
+
+	t.Run("not found for nonexistent resource", func(t *testing.T) {
+		result, err := testSession.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "get_task",
+			Arguments: map[string]any{"id": 999999},
+		})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if !result.IsError {
+			t.Fatal("expected error result for nonexistent task")
+		}
+	})
+}
+
 // TestE2E_GlobalTaskList verifies that list_tasks without a project_id works.
-// Currently expected to fail: Vikunja's CanDoAPIRoute has a bug where both
-// GET /api/v2/tasks and GET /api/v2/projects/:project/tasks normalise to the
-// same tasks.read_all map key, but only the project-scoped RouteDetail
-// survives — the global endpoint gets a 401.
-// Tracked in: https://github.com/go-vikunja/vikunja/issues/XXXX
 func TestE2E_GlobalTaskList(t *testing.T) {
 	result, err := testSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "list_tasks",
@@ -888,17 +1212,11 @@ func TestE2E_GlobalTaskList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallTool(list_tasks): %v", err)
 	}
-
-	// TODO: flip to !result.IsError once the Vikunja fix is deployed.
-	if !result.IsError {
-		t.Fatal("expected list_tasks without project_id to fail with 401 (Vikunja bug), but it succeeded — remove this expected-failure test")
-	}
-
-	tc, ok := result.Content[0].(*mcp.TextContent)
-	if !ok {
-		t.Fatalf("expected text content, got %T", result.Content[0])
-	}
-	if !strings.Contains(tc.Text, "401") {
-		t.Errorf("expected 401 in error text, got: %s", tc.Text)
+	if result.IsError {
+		tc, ok := result.Content[0].(*mcp.TextContent)
+		if !ok {
+			t.Fatal("list_tasks without project_id failed (non-text error)")
+		}
+		t.Fatalf("list_tasks without project_id failed: %s", tc.Text)
 	}
 }

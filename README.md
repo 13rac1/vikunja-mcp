@@ -1,6 +1,6 @@
 # vikunja-mcp
 
-An [MCP](https://modelcontextprotocol.io/) server that wraps the [Vikunja](https://vikunja.io/) v2 REST API, enabling AI agents to manage tasks, projects, labels, time entries, and more.
+An [MCP](https://modelcontextprotocol.io/) server that wraps the [Vikunja](https://vikunja.io/) v2 REST API, enabling AI agents to manage tasks, projects, labels, and more.
 
 ## Installation
 
@@ -50,7 +50,6 @@ curl -s -X POST https://vikunja.example.com/api/v2/tokens \
       "tasks_comments":  ["read_all", "create"],
       "tasks_assignees": ["create", "delete"],
       "tasks_relations": ["create", "delete"],
-      "time-entries":    ["read_all", "read_one", "create", "update", "delete"],
       "projects_views":  ["read_all", "read_one", "create", "update", "delete"]
     }
   }' | jq .token
@@ -153,11 +152,8 @@ The MCP endpoint will be available at `http://localhost:8080/mcp`.
 - `batch_update_tasks` — update multiple tasks at once
 
 ### Time Entries
-- `list_time_entries` — list time entries (filterable by date, project, task)
-- `create_time_entry` — log time or start a timer
-- `update_time_entry` — update a time entry
-- `delete_time_entry` — delete a time entry
-- `stop_timer` — stop the running timer
+
+Time tracking requires a [Vikunja license](https://vikunja.io/pricing). Time entry tools are not included in this MCP server.
 
 ## Resources
 

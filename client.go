@@ -177,12 +177,6 @@ var commentFields = map[string]bool{
 	"created": true, "updated": true,
 }
 
-var timeEntryFields = map[string]bool{
-	"id": true, "task_id": true, "project_id": true,
-	"user_id": true, "start_time": true, "end_time": true,
-	"comment": true, "created": true, "updated": true,
-}
-
 var taskRelationFields = map[string]bool{
 	"task_id": true, "other_task_id": true,
 	"relation_kind": true, "created_by": true, "created": true,
