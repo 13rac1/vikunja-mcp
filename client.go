@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -360,10 +361,22 @@ func textResult(raw []byte) *mcp.CallToolResult {
 }
 
 // errorResult converts an error into an MCP error result.
+// For 401/403 responses it appends actionable guidance so the LLM can
+// report the problem clearly instead of retrying blindly.
 func errorResult(err error) *mcp.CallToolResult {
+	msg := err.Error()
+	var ve *VikunjaError
+	if errors.As(err, &ve) {
+		switch ve.Status {
+		case http.StatusUnauthorized:
+			msg += "\n\nThe API token is invalid or expired. Check that VIKUNJA_TOKEN is set to a valid, non-expired token."
+		case http.StatusForbidden:
+			msg += "\n\nThe API token does not have permission for this operation. The token needs the correct permission group and scope granted in the Vikunja UI under Settings > API Tokens."
+		}
+	}
 	return &mcp.CallToolResult{
 		IsError: true,
-		Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 	}
 }
 

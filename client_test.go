@@ -655,12 +655,17 @@ func TestErrorResult(t *testing.T) {
 		wantMsg string
 	}{
 		{
-			name:    "vikunja error",
-			err:     &VikunjaError{Status: 403, Title: "Forbidden", Detail: "no access", Code: 1001},
-			wantMsg: "Forbidden: no access (HTTP 403, code 1001)",
+			name:    "401 unauthorized",
+			err:     &VikunjaError{Status: 401, Title: "Not Authenticated", Code: 1014},
+			wantMsg: "Not Authenticated (HTTP 401, code 1014)\n\nThe API token is invalid or expired. Check that VIKUNJA_TOKEN is set to a valid, non-expired token.",
 		},
 		{
-			name:    "vikunja error without detail",
+			name:    "403 forbidden",
+			err:     &VikunjaError{Status: 403, Title: "Forbidden", Detail: "no access", Code: 1001},
+			wantMsg: "Forbidden: no access (HTTP 403, code 1001)\n\nThe API token does not have permission for this operation. The token needs the correct permission group and scope granted in the Vikunja UI under Settings > API Tokens.",
+		},
+		{
+			name:    "500 no extra guidance",
 			err:     &VikunjaError{Status: 500, Title: "Internal Server Error", Code: 0},
 			wantMsg: "Internal Server Error (HTTP 500, code 0)",
 		},
