@@ -87,10 +87,13 @@ linters:
           - errcheck
       - path: _test\.go
         linters:
+          - errcheck
+      - path: _test\.go
+        linters:
           - gocyclo
       - path: _test\.go
         linters: [gosec]
-        text: "G101:"
+        text: "G10[14]:"
       # gosec: file/directory permissions are fine at 0o644/0o755
       - linters: [gosec]
         text: "G306:"

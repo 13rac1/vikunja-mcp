@@ -117,7 +117,7 @@ func composeDown(ctx context.Context) {
 	cmd := exec.CommandContext(ctx, "podman", "compose", "-f", composeFile, "down", "-v")
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
-	_ = cmd.Run() //nolint:errcheck // best-effort cleanup
+	_ = cmd.Run()
 }
 
 func waitForHealthy(ctx context.Context, healthURL string, timeout time.Duration) error {
@@ -153,7 +153,7 @@ func registerAndLogin(ctx context.Context, baseURL string) (string, error) {
 		"email":    "e2e@test.local",
 	}
 	// Ignore error: user may already exist from a previous call.
-	_ = postJSON(ctx, baseURL+"/api/v1/register", "", regBody, nil) //nolint:errcheck // idempotent registration
+	_ = postJSON(ctx, baseURL+"/api/v1/register", "", regBody, nil)
 
 	loginBody := map[string]string{
 		"username": "e2etest",
@@ -200,6 +200,7 @@ var fullPermissions = map[string][]string{
 	"tasks_assignees": {"create", "delete"},
 	"tasks_relations": {"create", "delete"},
 	"projects_views":  {"read_all", "read_one", "create", "update", "delete"},
+	"other":           {"user"},
 }
 
 // postJSON sends a JSON POST request. If authToken is non-empty, it's sent as a Bearer token.
@@ -234,9 +235,10 @@ func postJSON(ctx context.Context, url, authToken string, body, result any) erro
 	return nil
 }
 
-func setupMCP(ctx context.Context, vikunjaBaseURL, token string) (*mcp.ClientSession, func(), error) {
-	apiClient := NewClient(vikunjaBaseURL, token)
+func setupMCP(ctx context.Context, _ /* vikunjaBaseURL */, token string) (*mcp.ClientSession, func(), error) {
+	apiClient := NewClient(vikunjaURL, token)
 	server := mcp.NewServer(&mcp.Implementation{Name: "vikunja-mcp", Version: "test"}, nil)
+	registerUserTools(server, apiClient)
 	registerProjectTools(server, apiClient)
 	registerTaskTools(server, apiClient)
 	registerLabelTools(server, apiClient)
@@ -1094,7 +1096,7 @@ func TestE2E_PowerQueries_Extra(t *testing.T) {
 	projectID := jsonID(t, project)
 
 	// Task due today.
-	today := time.Now().Format("2006-01-02") + "T23:59:59Z"
+	today := time.Now().UTC().Format("2006-01-02") + "T23:59:59Z"
 	callTool(t, "create_task", map[string]any{
 		"project_id": projectID,
 		"title":      "Due Today Task",
@@ -1102,7 +1104,7 @@ func TestE2E_PowerQueries_Extra(t *testing.T) {
 	})
 
 	// Task due in 3 days.
-	threeDays := time.Now().Add(3*24*time.Hour).Format("2006-01-02") + "T12:00:00Z"
+	threeDays := time.Now().UTC().Add(3 * 24 * time.Hour).Format("2006-01-02") + "T12:00:00Z"
 	callTool(t, "create_task", map[string]any{
 		"project_id": projectID,
 		"title":      "Due In 3 Days",
@@ -1201,6 +1203,102 @@ func TestE2E_ErrorPaths(t *testing.T) {
 			t.Fatal("expected error result for nonexistent task")
 		}
 	})
+}
+
+func TestE2E_GetCurrentUser(t *testing.T) {
+	result := callTool(t, "get_current_user", nil)
+	if _, ok := result["id"]; !ok {
+		t.Error("missing id field")
+	}
+	if _, ok := result["username"]; !ok {
+		t.Error("missing username field")
+	}
+	// Regular user should have bot_owner_id absent (omitempty) or 0.
+	if ownerID, ok := result["bot_owner_id"].(float64); ok && ownerID != 0 {
+		t.Errorf("expected bot_owner_id=0 for regular user, got %v", ownerID)
+	}
+}
+
+func TestE2E_BotGuidance(t *testing.T) {
+	ctx := context.Background()
+
+	// Create a bot user via the owner's JWT.
+	var botResp struct {
+		ID int64 `json:"id"`
+	}
+	err := postJSON(ctx, vikunjaURL+"/api/v2/user/bots", jwt, map[string]any{
+		"username": "bot-e2e-guidance",
+		"name":     "E2E Guidance Bot",
+	}, &botResp)
+	if err != nil {
+		t.Fatalf("create bot: %v", err)
+	}
+	t.Logf("created bot id=%d", botResp.ID)
+
+	// Create an API token for the bot by specifying owner_id.
+	tokenBody := map[string]any{
+		"title":       "bot-e2e-token",
+		"owner_id":    botResp.ID,
+		"permissions": fullPermissions,
+		"expires_at":  "2099-01-01T00:00:00Z",
+	}
+	var tokenResp struct {
+		Token string `json:"token"`
+	}
+	if err = postJSON(ctx, vikunjaURL+"/api/v2/tokens", jwt, tokenBody, &tokenResp); err != nil {
+		t.Fatalf("create bot token: %v", err)
+	}
+	if tokenResp.Token == "" {
+		t.Fatal("bot token creation returned empty token")
+	}
+
+	// Set up MCP session with the bot token.
+	botSession, botCleanup, err := setupMCP(ctx, vikunjaURL, tokenResp.Token)
+	if err != nil {
+		t.Fatalf("setup bot MCP: %v", err)
+	}
+	defer botCleanup()
+
+	// Call list_projects — should return empty with bot guidance.
+	result, err := botSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "list_projects",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("list_projects: %v", err)
+	}
+	if result.IsError {
+		tc, _ := result.Content[0].(*mcp.TextContent)
+		t.Fatalf("list_projects returned error: %s", tc.Text)
+	}
+	if len(result.Content) < 2 {
+		t.Fatalf("expected 2 content blocks (data + guidance), got %d", len(result.Content))
+	}
+	guidance, ok := result.Content[1].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content for guidance, got %T", result.Content[1])
+	}
+	if !strings.Contains(guidance.Text, "bot user") {
+		t.Errorf("guidance should mention bot user: %s", guidance.Text)
+	}
+
+	// Verify get_current_user shows non-zero bot_owner_id.
+	userResult, err := botSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "get_current_user",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("get_current_user: %v", err)
+	}
+	userText := toolText(t, "get_current_user", userResult)
+	var userInfo map[string]any
+	if err := json.Unmarshal([]byte(userText), &userInfo); err != nil {
+		t.Fatalf("unmarshal user info: %v", err)
+	}
+	ownerID, ok := userInfo["bot_owner_id"].(float64)
+	if !ok || ownerID == 0 {
+		t.Errorf("expected non-zero bot_owner_id, got %v", userInfo["bot_owner_id"])
+	}
 }
 
 // TestE2E_GlobalTaskList verifies that list_tasks without a project_id works.

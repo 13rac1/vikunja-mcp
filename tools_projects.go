@@ -49,7 +49,15 @@ func registerProjectTools(server *mcp.Server, client *Client) {
 		if err != nil {
 			return errorResult(err), nil, nil
 		}
-		return filteredResult(raw, projectFields), nil, nil
+		result := filteredResult(raw, projectFields)
+		if isEmptyPaginatedResult(raw) && client.isBot(ctx) {
+			result.Content = append(result.Content, &mcp.TextContent{
+				Text: "\n\nThis is a bot user. Bot users start with no access to any projects. " +
+					"The bot's owner must share projects with this bot in Vikunja " +
+					"(project settings > sharing, or Settings > Bots) before they will appear here.",
+			})
+		}
+		return result, nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{

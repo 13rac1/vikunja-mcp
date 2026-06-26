@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -863,5 +864,167 @@ func TestDeleteResult(t *testing.T) {
 	}
 	if tc.Text != "deleted" {
 		t.Errorf("Text = %q, want %q", tc.Text, "deleted")
+	}
+}
+
+func TestFetchUserInfo_Bot(t *testing.T) {
+	srv, _ := newMockAPI(t, 200, `{"id":42,"username":"bot-helper","name":"Helper Bot","bot_owner_id":1}`)
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "tk_test")
+	info, err := client.fetchUserInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != 42 {
+		t.Errorf("ID = %d, want 42", info.ID)
+	}
+	if info.BotOwnerID != 1 {
+		t.Errorf("BotOwnerID = %d, want 1", info.BotOwnerID)
+	}
+	if !client.isBot(context.Background()) {
+		t.Error("expected isBot=true")
+	}
+}
+
+func TestFetchUserInfo_Regular(t *testing.T) {
+	srv, _ := newMockAPI(t, 200, `{"id":1,"username":"alice","name":"Alice"}`)
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "tk_test")
+	info, err := client.fetchUserInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.BotOwnerID != 0 {
+		t.Errorf("BotOwnerID = %d, want 0", info.BotOwnerID)
+	}
+	if client.isBot(context.Background()) {
+		t.Error("expected isBot=false")
+	}
+}
+
+func TestFetchUserInfo_Error(t *testing.T) {
+	srv, _ := newMockAPI(t, 401, `{"status":401,"title":"Unauthorized","detail":"bad token","code":0}`)
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "tk_test")
+	_, err := client.fetchUserInfo(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if client.isBot(context.Background()) {
+		t.Error("expected isBot=false on error")
+	}
+}
+
+func TestIsEmptyPaginatedResult(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"empty envelope", `{"items":[],"total":0,"page":1,"per_page":50,"total_pages":0}`, true},
+		{"non-empty", `{"items":[{"id":1}],"total":1,"page":1,"per_page":50,"total_pages":1}`, false},
+		{"not paginated", `{"id":1,"title":"test"}`, false},
+		{"invalid json", `{broken`, false},
+		{"null items", `{"items":null,"total":0}`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isEmptyPaginatedResult([]byte(tt.raw))
+			if got != tt.want {
+				t.Errorf("isEmptyPaginatedResult(%s) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+// setupTestMCP creates an in-process MCP client session backed by a mock HTTP server.
+func setupTestMCP(t *testing.T, httpSrv *httptest.Server, registerFuncs ...func(*mcp.Server, *Client)) *mcp.ClientSession {
+	t.Helper()
+	client := NewClient(httpSrv.URL, "tk_test")
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+	for _, f := range registerFuncs {
+		f(server, client)
+	}
+
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	ctx := context.Background()
+
+	srvCtx, srvCancel := context.WithCancel(ctx)
+	go func() { _ = server.Run(srvCtx, serverTransport) }()
+
+	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0"}, nil)
+	session, err := mcpClient.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		srvCancel()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = session.Close()
+		srvCancel()
+	})
+	return session
+}
+
+func TestListProjects_BotGuidance(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/user"):
+			w.Write([]byte(`{"id":42,"username":"bot-test","name":"Bot","bot_owner_id":1}`))
+		case strings.HasSuffix(r.URL.Path, "/projects"):
+			w.Write([]byte(`{"items":[],"total":0,"page":1,"per_page":50,"total_pages":0}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	session := setupTestMCP(t, srv, registerProjectTools)
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "list_projects",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Content) < 2 {
+		t.Fatalf("expected 2 content blocks (data + guidance), got %d", len(result.Content))
+	}
+	guidance, ok := result.Content[1].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content for guidance, got %T", result.Content[1])
+	}
+	if !strings.Contains(guidance.Text, "bot user") {
+		t.Errorf("guidance should mention bot user: %s", guidance.Text)
+	}
+}
+
+func TestListProjects_NoGuidanceForRegularUser(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/user"):
+			w.Write([]byte(`{"id":1,"username":"alice","name":"Alice"}`))
+		case strings.HasSuffix(r.URL.Path, "/projects"):
+			w.Write([]byte(`{"items":[],"total":0,"page":1,"per_page":50,"total_pages":0}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	session := setupTestMCP(t, srv, registerProjectTools)
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "list_projects",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Content) != 1 {
+		t.Errorf("expected 1 content block for regular user, got %d", len(result.Content))
 	}
 }

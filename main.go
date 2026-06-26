@@ -35,6 +35,7 @@ func main() {
 		Version: version,
 	}, nil)
 
+	registerUserTools(server, client)
 	registerProjectTools(server, client)
 	registerTaskTools(server, client)
 	registerLabelTools(server, client)

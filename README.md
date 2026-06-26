@@ -50,7 +50,8 @@ curl -s -X POST https://vikunja.example.com/api/v2/tokens \
       "tasks_comments":  ["read_all", "create"],
       "tasks_assignees": ["create", "delete"],
       "tasks_relations": ["create", "delete"],
-      "projects_views":  ["read_all", "read_one", "create", "update", "delete"]
+      "projects_views":  ["read_all", "read_one", "create", "update", "delete"],
+      "other":           ["user"]
     }
   }' | jq .token
 ```
@@ -92,6 +93,9 @@ VIKUNJA_URL=https://vikunja.example.com VIKUNJA_TOKEN=tk_... vikunja-mcp -http :
 The MCP endpoint will be available at `http://localhost:8080/mcp`.
 
 ## Tools
+
+### User
+- `get_current_user` — get the authenticated user's profile (includes `bot_owner_id` for bot detection)
 
 ### Projects
 - `list_projects` — list all projects (search, pagination)

@@ -12,16 +12,28 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// userInfo holds cached identity information about the authenticated user.
+type userInfo struct {
+	ID         int64
+	Username   string
+	BotOwnerID int64
+}
 
 // Client is a thin HTTP client for the Vikunja v2 REST API.
 type Client struct {
 	baseURL    string // always ends with /api/v2
 	token      string
 	httpClient *http.Client
+
+	userOnce sync.Once
+	user     *userInfo
+	userErr  error
 }
 
 // NewClient creates a Vikunja API client. baseURL can be either the instance
@@ -118,6 +130,49 @@ func (c *Client) do(ctx context.Context, method, path string, body, result any) 
 	return nil
 }
 
+// fetchUserInfo calls GET /user once and caches the result.
+func (c *Client) fetchUserInfo(ctx context.Context) (*userInfo, error) {
+	c.userOnce.Do(func() {
+		var raw struct {
+			ID         int64  `json:"id"`
+			Username   string `json:"username"`
+			BotOwnerID int64  `json:"bot_owner_id"`
+		}
+		c.userErr = c.do(ctx, "GET", "/user", nil, &raw)
+		if c.userErr != nil {
+			return
+		}
+		c.user = &userInfo{
+			ID:         raw.ID,
+			Username:   raw.Username,
+			BotOwnerID: raw.BotOwnerID,
+		}
+	})
+	return c.user, c.userErr
+}
+
+// isBot returns true if the authenticated user is a bot (has a non-zero BotOwnerID).
+// Returns false on error so callers can skip bot-specific logic gracefully.
+func (c *Client) isBot(ctx context.Context) bool {
+	info, err := c.fetchUserInfo(ctx)
+	return err == nil && info.BotOwnerID > 0
+}
+
+// isEmptyPaginatedResult returns true if raw JSON is a paginated envelope with zero items.
+func isEmptyPaginatedResult(raw []byte) bool {
+	var envelope struct {
+		Total int              `json:"total"`
+		Items *json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return false
+	}
+	if envelope.Items == nil {
+		return false
+	}
+	return envelope.Total == 0 && (string(*envelope.Items) == "[]" || string(*envelope.Items) == "null")
+}
+
 // buildPageQuery returns query parameters for the standard page/per_page/q pattern.
 func buildPageQuery(search string, page, perPage int) url.Values {
 	params := url.Values{}
@@ -144,6 +199,7 @@ func appendQuery(path string, params url.Values) string {
 // Field whitelists for response filtering. Only these fields are kept in tool responses.
 var userFields = map[string]bool{
 	"id": true, "username": true, "name": true,
+	"bot_owner_id": true,
 }
 
 var taskFields = map[string]bool{
