@@ -8,8 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -255,6 +258,21 @@ var bucketFields = map[string]bool{
 	"created": true, "updated": true,
 }
 
+var attachmentFields = map[string]bool{
+	"id": true, "task_id": true, "created_by": true,
+	"file": true, "created": true,
+}
+
+var fileFields = map[string]bool{
+	"id": true, "name": true, "mime": true, "size": true, "created": true,
+}
+
+// uploadResultFields whitelists the upload response envelope fields.
+// The "success" array contains attachment objects, filtered via nestedWhitelists.
+var uploadResultFields = map[string]bool{
+	"success": true, "errors": true,
+}
+
 // nestedWhitelists maps field names to whitelists for their nested objects.
 var nestedWhitelists = map[string]map[string]bool{
 	"created_by": userFields,
@@ -264,6 +282,8 @@ var nestedWhitelists = map[string]map[string]bool{
 	"labels":     labelFields,
 	"reminders":  reminderFields,
 	"tasks":      taskFields,
+	"file":       fileFields,
+	"success":    attachmentFields,
 }
 
 // mapOfArraysWhitelists maps field names whose value is map[string][]object
@@ -479,5 +499,144 @@ func normalizeDateMapKeys(m map[string]any) {
 				}
 			}
 		}
+	}
+}
+
+// doUpload sends a multipart/form-data POST streaming from an open file.
+// The file is read in a background goroutine via io.Pipe to avoid buffering
+// the entire file in memory. Returns the raw response body bytes.
+// Returns *VikunjaError on non-2xx.
+func (c *Client) doUpload(ctx context.Context, path string, file *os.File, fileName string) ([]byte, error) {
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+	contentType := writer.FormDataContentType()
+
+	go func() {
+		part, err := writer.CreateFormFile("files", fileName)
+		if err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		if _, err = io.Copy(part, file); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		if err = writer.Close(); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		pw.Close() //nolint:gosec // all errors already propagated via CloseWithError
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+path, pr) //nolint:gosec // URL is from trusted config
+	if err != nil {
+		pr.Close() //nolint:gosec // unblock goroutine; error already captured
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := c.httpClient.Do(req) //nolint:gosec // covered above
+	if err != nil {
+		pr.Close() //nolint:gosec // unblock goroutine; error already captured
+		return nil, fmt.Errorf("executing request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		var ve VikunjaError
+		if jsonErr := json.Unmarshal(data, &ve); jsonErr != nil {
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(data))
+		}
+		if ve.Status == 0 {
+			ve.Status = resp.StatusCode
+		}
+		return nil, &ve
+	}
+
+	return data, nil
+}
+
+// maxDownloadSize is the maximum response body size (in bytes) that doDownload
+// will write to disk. Downloads exceeding this are aborted.
+// Defined as var (not const) to allow test overrides.
+var maxDownloadSize int64 = 100 * 1024 * 1024 // 100 MB
+
+// doDownload sends an authenticated GET and writes the response body to destPath.
+// Returns *VikunjaError on non-2xx responses.
+func (c *Client) doDownload(ctx context.Context, path, destPath string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+path, http.NoBody) //nolint:gosec // URL is from trusted config
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req) //nolint:gosec // covered above
+	if err != nil {
+		return fmt.Errorf("executing request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		data, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("reading error response: %w", readErr)
+		}
+		var ve VikunjaError
+		if jsonErr := json.Unmarshal(data, &ve); jsonErr != nil {
+			return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(data))
+		}
+		if ve.Status == 0 {
+			ve.Status = resp.StatusCode
+		}
+		return &ve
+	}
+
+	// Write to a temp file then link atomically to prevent partial writes
+	// and TOCTOU overwrites of files created between validation and write.
+	tmp, err := os.CreateTemp(filepath.Dir(destPath), ".download-*")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+
+	limited := io.LimitReader(resp.Body, maxDownloadSize+1)
+	n, copyErr := io.Copy(tmp, limited)
+	if copyErr != nil {
+		tmp.Close() //nolint:gosec // best-effort close in error path
+		removeTempFile(tmpName)
+		return fmt.Errorf("writing file: %w", copyErr)
+	}
+	if n > maxDownloadSize {
+		tmp.Close() //nolint:gosec // best-effort close in error path
+		removeTempFile(tmpName)
+		return fmt.Errorf("download too large: exceeded %d bytes", maxDownloadSize)
+	}
+	if err = tmp.Close(); err != nil {
+		removeTempFile(tmpName)
+		return fmt.Errorf("closing temp file: %w", err)
+	}
+	// Use Link (atomic create-or-fail) instead of Rename to prevent overwriting
+	// a file created between validation and write (TOCTOU). Link fails if
+	// destPath already exists. Both paths are in the same directory, so
+	// cross-filesystem issues don't apply.
+	if err = os.Link(tmpName, destPath); err != nil {
+		removeTempFile(tmpName)
+		return fmt.Errorf("creating output file: %w", err)
+	}
+	removeTempFile(tmpName)
+	return nil
+}
+
+// removeTempFile removes a temporary file, logging the error if removal fails.
+// Used for best-effort cleanup in error paths.
+func removeTempFile(path string) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "warning: failed to remove temp file %s: %v\n", path, err)
 	}
 }

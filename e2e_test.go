@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -192,15 +193,16 @@ func createAPIToken(ctx context.Context, baseURL, jwtToken, title string, permis
 
 // fullPermissions returns the complete set of API token permissions for all MCP tools.
 var fullPermissions = map[string][]string{
-	"projects":        {"read_all", "read_one", "create", "update", "delete", "views_buckets_tasks", "views_buckets_tasks_get"},
-	"tasks":           {"read_all", "read_one", "create", "update", "delete"},
-	"labels":          {"read_all", "create", "delete"},
-	"tasks_labels":    {"create", "delete"},
-	"tasks_comments":  {"read_all", "create"},
-	"tasks_assignees": {"create", "delete"},
-	"tasks_relations": {"create", "delete"},
-	"projects_views":  {"read_all", "read_one", "create", "update", "delete"},
-	"other":           {"user"},
+	"projects":          {"read_all", "read_one", "create", "update", "delete", "views_buckets_tasks", "views_buckets_tasks_get"},
+	"tasks":             {"read_all", "read_one", "create", "update", "delete"},
+	"labels":            {"read_all", "create", "delete"},
+	"tasks_labels":      {"create", "delete"},
+	"tasks_comments":    {"read_all", "create"},
+	"tasks_assignees":   {"create", "delete"},
+	"tasks_relations":   {"create", "delete"},
+	"tasks_attachments": {"read_all", "read_one", "create", "delete"},
+	"projects_views":    {"read_all", "read_one", "create", "update", "delete"},
+	"other":             {"user"},
 }
 
 // postJSON sends a JSON POST request. If authToken is non-empty, it's sent as a Bearer token.
@@ -248,6 +250,7 @@ func setupMCP(ctx context.Context, _ /* vikunjaBaseURL */, token string) (*mcp.C
 	registerRelationTools(server, apiClient)
 	registerViewTools(server, apiClient)
 	registerBatchTools(server, apiClient)
+	registerAttachmentTools(server, apiClient)
 	registerResources(server, apiClient)
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -1298,6 +1301,88 @@ func TestE2E_BotGuidance(t *testing.T) {
 	ownerID, ok := userInfo["bot_owner_id"].(float64)
 	if !ok || ownerID == 0 {
 		t.Errorf("expected non-zero bot_owner_id, got %v", userInfo["bot_owner_id"])
+	}
+}
+
+// TestE2E_AttachmentLifecycle tests upload, list, download, and delete of task attachments.
+func TestE2E_AttachmentLifecycle(t *testing.T) {
+	// Create a project and task.
+	proj := callTool(t, "create_project", map[string]any{"title": "Attachment Test Project"})
+	projectID := jsonID(t, proj)
+	task := callTool(t, "create_task", map[string]any{"project_id": projectID, "title": "Task With Attachments"})
+	taskID := jsonID(t, task)
+
+	// Create a temp file to upload.
+	tmpDir := t.TempDir()
+	srcPath := filepath.Join(tmpDir, "test-upload.txt")
+	fileContent := []byte("attachment content for e2e test")
+	if err := os.WriteFile(srcPath, fileContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Upload.
+	uploadResult := callTool(t, "upload_attachment", map[string]any{
+		"task_id":   taskID,
+		"file_path": srcPath,
+	})
+	successArr, ok := uploadResult["success"].([]any)
+	if !ok || len(successArr) == 0 {
+		t.Fatalf("expected non-empty success array, got %v", uploadResult)
+	}
+	firstSuccess, ok := successArr[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map in success[0], got %T", successArr[0])
+	}
+	attachmentID := jsonID(t, firstSuccess)
+
+	// List.
+	listText := callToolText(t, "list_attachments", map[string]any{"task_id": taskID})
+	if !strings.Contains(listText, "test-upload.txt") {
+		t.Errorf("list_attachments should contain filename, got: %s", listText)
+	}
+
+	// Download.
+	destPath := filepath.Join(tmpDir, "downloaded.txt")
+	downloadResult := callTool(t, "download_attachment", map[string]any{
+		"task_id":       taskID,
+		"attachment_id": attachmentID,
+		"output_path":   destPath,
+	})
+	if downloadResult["status"] != "saved" {
+		t.Errorf("expected status=saved, got %v", downloadResult["status"])
+	}
+	got, err := os.ReadFile(destPath)
+	if err != nil {
+		t.Fatalf("reading downloaded file: %v", err)
+	}
+	if !bytes.Equal(got, fileContent) {
+		t.Errorf("downloaded content = %q, want %q", got, fileContent)
+	}
+
+	// Delete.
+	deleteText := callToolText(t, "delete_attachment", map[string]any{
+		"task_id":       taskID,
+		"attachment_id": attachmentID,
+	})
+	if deleteText != "deleted" {
+		t.Errorf("expected 'deleted', got %q", deleteText)
+	}
+
+	// Verify gone. Vikunja returns HTTP 500 when listing attachments on a task
+	// with zero attachments (upstream bug), so we accept an error as "gone".
+	// https://github.com/go-vikunja/vikunja/pull/3062
+	verifyResult, verifyErr := testSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "list_attachments",
+		Arguments: map[string]any{"task_id": taskID},
+	})
+	if verifyErr != nil {
+		t.Fatalf("CallTool(list_attachments): %v", verifyErr)
+	}
+	if !verifyResult.IsError {
+		listAfter := toolText(t, "list_attachments", verifyResult)
+		if strings.Contains(listAfter, "test-upload.txt") {
+			t.Error("attachment should be gone after delete")
+		}
 	}
 }
 

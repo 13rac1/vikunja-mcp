@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1091,6 +1093,427 @@ func TestNormalizeDateMapKeys_NoDates(t *testing.T) {
 	normalizeDateMapKeys(m)
 	if m["title"] != "No dates" || m["priority"] != 1 {
 		t.Error("map without date fields should be unchanged")
+	}
+}
+
+func TestDoUpload_SendsMultipart(t *testing.T) {
+	var gotContentType, gotAuth string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		gotAuth = r.Header.Get("Authorization")
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading body: %v", err)
+		}
+		gotBody = b
+		w.WriteHeader(201)
+		w.Write([]byte(`{"success":[{"id":1}],"errors":[]}`))
+	}))
+	defer srv.Close()
+
+	// Create a temp file to upload.
+	tmpFile := filepath.Join(t.TempDir(), "test.txt")
+	if err := os.WriteFile(tmpFile, []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	client := NewClient(srv.URL, "tk_upload")
+	raw, err := client.doUpload(context.Background(), "/tasks/1/attachments", f, "test.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotAuth != "Bearer tk_upload" {
+		t.Errorf("auth = %q, want %q", gotAuth, "Bearer tk_upload")
+	}
+	if !strings.HasPrefix(gotContentType, "multipart/form-data") {
+		t.Errorf("content-type = %q, want multipart/form-data prefix", gotContentType)
+	}
+	if !bytes.Contains(gotBody, []byte("hello world")) {
+		t.Error("request body should contain file content")
+	}
+	if !bytes.Contains(gotBody, []byte("test.txt")) {
+		t.Error("request body should contain filename")
+	}
+	if !strings.Contains(string(raw), `"success"`) {
+		t.Errorf("response = %s, want success field", string(raw))
+	}
+}
+
+func TestDoUpload_ErrorResponse(t *testing.T) {
+	srv, _ := newMockAPI(t, 403, `{"status":403,"title":"Forbidden","detail":"no access","code":0}`)
+	defer srv.Close()
+
+	tmpFile := filepath.Join(t.TempDir(), "test.txt")
+	if err := os.WriteFile(tmpFile, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	client := NewClient(srv.URL, "tk_test")
+	_, err = client.doUpload(context.Background(), "/tasks/1/attachments", f, "test.txt")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var ve *VikunjaError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected *VikunjaError, got %T: %v", err, err)
+	}
+	if ve.Status != 403 {
+		t.Errorf("status = %d, want 403", ve.Status)
+	}
+}
+
+func TestDoDownload_WritesFile(t *testing.T) {
+	content := []byte("binary file content here")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(content)
+	}))
+	defer srv.Close()
+
+	dest := filepath.Join(t.TempDir(), "downloaded.bin")
+	client := NewClient(srv.URL, "tk_test")
+	if err := client.doDownload(context.Background(), "/tasks/1/attachments/5", dest); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("file content = %q, want %q", got, content)
+	}
+}
+
+func TestDoDownload_ErrorResponse(t *testing.T) {
+	srv, _ := newMockAPI(t, 404, `{"status":404,"title":"Not Found","detail":"attachment not found","code":4004}`)
+	defer srv.Close()
+
+	dest := filepath.Join(t.TempDir(), "should-not-exist.bin")
+	client := NewClient(srv.URL, "tk_test")
+	err := client.doDownload(context.Background(), "/tasks/1/attachments/999", dest)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var ve *VikunjaError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected *VikunjaError, got %T: %v", err, err)
+	}
+	if ve.Status != 404 {
+		t.Errorf("status = %d, want 404", ve.Status)
+	}
+	// File should not have been created.
+	if _, statErr := os.Stat(dest); statErr == nil {
+		t.Error("file should not exist after error response")
+	}
+}
+
+func TestDoDownload_RejectsOversizedResponse(t *testing.T) {
+	orig := maxDownloadSize
+	maxDownloadSize = 100 // 100 bytes for testing
+	t.Cleanup(func() { maxDownloadSize = orig })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(bytes.Repeat([]byte("x"), 200))
+	}))
+	defer srv.Close()
+
+	dest := filepath.Join(t.TempDir(), "too-large.bin")
+	client := NewClient(srv.URL, "tk_test")
+	err := client.doDownload(context.Background(), "/tasks/1/attachments/1", dest)
+	if err == nil {
+		t.Fatal("expected error for oversized download")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Errorf("error = %q, want 'too large' message", err.Error())
+	}
+	if _, statErr := os.Stat(dest); statErr == nil {
+		t.Error("file should not exist after oversized download rejected")
+	}
+}
+
+func TestUploadAttachment_RejectsRelativePath(t *testing.T) {
+	srv, _ := newMockAPI(t, 200, `{}`)
+	defer srv.Close()
+
+	session := setupTestMCP(t, srv, registerAttachmentTools)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "upload_attachment",
+		Arguments: map[string]any{"task_id": 1, "file_path": "relative/path.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for relative path")
+	}
+}
+
+func TestUploadAttachment_RejectsDirectory(t *testing.T) {
+	srv, _ := newMockAPI(t, 200, `{}`)
+	defer srv.Close()
+
+	session := setupTestMCP(t, srv, registerAttachmentTools)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "upload_attachment",
+		Arguments: map[string]any{"task_id": 1, "file_path": t.TempDir()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for directory")
+	}
+}
+
+func TestDownloadAttachment_RejectsRelativePath(t *testing.T) {
+	srv, _ := newMockAPI(t, 200, `{}`)
+	defer srv.Close()
+
+	session := setupTestMCP(t, srv, registerAttachmentTools)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "download_attachment",
+		Arguments: map[string]any{"task_id": 1, "attachment_id": 1, "output_path": "relative/out.bin"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for relative path")
+	}
+}
+
+func TestDownloadAttachment_RejectsMissingParentDir(t *testing.T) {
+	srv, _ := newMockAPI(t, 200, `{}`)
+	defer srv.Close()
+
+	session := setupTestMCP(t, srv, registerAttachmentTools)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "download_attachment",
+		Arguments: map[string]any{"task_id": 1, "attachment_id": 1, "output_path": "/no/such/parent/out.bin"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for missing parent directory")
+	}
+}
+
+func TestUploadAttachment_RejectsSymlink(t *testing.T) {
+	srv, _ := newMockAPI(t, 200, `{}`)
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	realFile := filepath.Join(tmpDir, "real.txt")
+	if err := os.WriteFile(realFile, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(tmpDir, "link.txt")
+	if err := os.Symlink(realFile, symlink); err != nil {
+		t.Fatal(err)
+	}
+
+	session := setupTestMCP(t, srv, registerAttachmentTools)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "upload_attachment",
+		Arguments: map[string]any{"task_id": 1, "file_path": symlink},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for symlink")
+	}
+}
+
+func TestUploadAttachment_RejectsPathTraversal(t *testing.T) {
+	srv, _ := newMockAPI(t, 200, `{}`)
+	defer srv.Close()
+
+	session := setupTestMCP(t, srv, registerAttachmentTools)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "upload_attachment",
+		Arguments: map[string]any{"task_id": 1, "file_path": "/tmp/safe/../../etc/passwd"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for path with .. components")
+	}
+}
+
+func TestUploadAttachment_RejectsOversizedFile(t *testing.T) {
+	srv, _ := newMockAPI(t, 200, `{}`)
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	bigFile := filepath.Join(tmpDir, "big.bin")
+	// Create a sparse file larger than maxUploadSize.
+	f, err := os.Create(bigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncErr := f.Truncate(maxUploadSize + 1); truncErr != nil {
+		f.Close()
+		t.Fatal(truncErr)
+	}
+	f.Close()
+
+	session := setupTestMCP(t, srv, registerAttachmentTools)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "upload_attachment",
+		Arguments: map[string]any{"task_id": 1, "file_path": bigFile},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for oversized file")
+	}
+}
+
+func TestDownloadAttachment_RejectsExistingFile(t *testing.T) {
+	srv, _ := newMockAPI(t, 200, `{}`)
+	defer srv.Close()
+
+	existing := filepath.Join(t.TempDir(), "existing.txt")
+	if err := os.WriteFile(existing, []byte("important data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session := setupTestMCP(t, srv, registerAttachmentTools)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "download_attachment",
+		Arguments: map[string]any{"task_id": 1, "attachment_id": 1, "output_path": existing},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for existing file")
+	}
+
+	// Verify original file is untouched.
+	got, err := os.ReadFile(existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "important data" {
+		t.Errorf("existing file was modified: %q", got)
+	}
+}
+
+func TestDownloadAttachment_RejectsPathTraversal(t *testing.T) {
+	srv, _ := newMockAPI(t, 200, `{}`)
+	defer srv.Close()
+
+	session := setupTestMCP(t, srv, registerAttachmentTools)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "download_attachment",
+		Arguments: map[string]any{"task_id": 1, "attachment_id": 1, "output_path": "/tmp/safe/../../etc/evil"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for path with .. components")
+	}
+}
+
+func TestDownloadAttachment_ResolvesSymlinkInParent(t *testing.T) {
+	tmpDir := t.TempDir()
+	realDir := filepath.Join(tmpDir, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkDir := filepath.Join(tmpDir, "link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Fatal(err)
+	}
+
+	content := []byte("downloaded via symlink parent")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write(content)
+	}))
+	defer srv.Close()
+
+	session := setupTestMCP(t, srv, registerAttachmentTools)
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "download_attachment",
+		Arguments: map[string]any{"task_id": 1, "attachment_id": 1, "output_path": filepath.Join(linkDir, "out.bin")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Errorf("expected success, got error: %v", result.Content)
+	}
+
+	// File should be written to the real directory, not through the symlink.
+	got, readErr := os.ReadFile(filepath.Join(realDir, "out.bin"))
+	if readErr != nil {
+		t.Fatalf("reading file from real dir: %v", readErr)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("file content = %q, want %q", got, content)
+	}
+}
+
+func TestValidateAndOpenUpload(t *testing.T) {
+	tmpDir := t.TempDir()
+	goodFile := filepath.Join(tmpDir, "ok.txt")
+	if err := os.WriteFile(goodFile, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := validateAndOpenUpload(goodFile)
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Error("expected regular file info")
+	}
+}
+
+func TestValidateAndOpenUpload_MissingFile(t *testing.T) {
+	_, err := validateAndOpenUpload(filepath.Join(t.TempDir(), "nonexistent.txt"))
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestValidateDownloadPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	goodPath := filepath.Join(tmpDir, "new-file.bin")
+
+	resolved, err := validateDownloadPath(goodPath)
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	// On macOS, /var -> /private/var, so the resolved path may differ.
+	if filepath.Base(resolved) != "new-file.bin" {
+		t.Errorf("resolved path base = %q, want %q", filepath.Base(resolved), "new-file.bin")
 	}
 }
 

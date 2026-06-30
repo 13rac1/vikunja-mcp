@@ -47,6 +47,7 @@ func main() {
 	registerRelationTools(server, client)
 	registerViewTools(server, client)
 	registerBatchTools(server, client)
+	registerAttachmentTools(server, client)
 	registerResources(server, client)
 	server.AddReceivingMiddleware(errorLoggingMiddleware)
 
