@@ -436,3 +436,48 @@ func deleteResult() *mcp.CallToolResult {
 		Content: []mcp.Content{&mcp.TextContent{Text: "deleted"}},
 	}
 }
+
+// normalizeDate converts a bare YYYY-MM-DD date to a full RFC 3339 datetime
+// (YYYY-MM-DDT00:00:00Z). Strings that already contain a time component or
+// are not valid dates are returned unchanged.
+func normalizeDate(s string) string {
+	if _, err := time.Parse("2006-01-02", s); err == nil {
+		return s + "T00:00:00Z"
+	}
+	return s
+}
+
+// normalizeDatePtr is normalizeDate for optional (pointer) fields.
+func normalizeDatePtr(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	v := normalizeDate(*s)
+	return &v
+}
+
+// dateKeys are the task fields that hold datetime values.
+var dateKeys = map[string]bool{
+	"due_date":   true,
+	"start_date": true,
+	"end_date":   true,
+}
+
+// normalizeDateMapKeys normalizes known date fields in a task map.
+// Used by batch operations where input is untyped map[string]any.
+func normalizeDateMapKeys(m map[string]any) {
+	for key := range dateKeys {
+		if v, ok := m[key].(string); ok {
+			m[key] = normalizeDate(v)
+		}
+	}
+	if reminders, ok := m["reminders"].([]any); ok {
+		for _, r := range reminders {
+			if rm, ok := r.(map[string]any); ok {
+				if v, ok := rm["reminder"].(string); ok {
+					rm["reminder"] = normalizeDate(v)
+				}
+			}
+		}
+	}
+}

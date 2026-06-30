@@ -24,7 +24,7 @@ type GetTaskInput struct {
 }
 
 type ReminderInput struct {
-	Reminder       string `json:"reminder,omitempty"        jsonschema:"absolute reminder time in ISO 8601 format"`
+	Reminder       string `json:"reminder,omitempty"        jsonschema:"absolute reminder time as RFC 3339 datetime (e.g. 2026-07-09T14:00:00Z)"`
 	RelativePeriod *int64 `json:"relative_period,omitempty" jsonschema:"relative reminder offset in seconds (negative = before)"`
 	RelativeTo     string `json:"relative_to,omitempty"     jsonschema:"what the relative period is relative to: due_date start_date end_date"`
 }
@@ -34,9 +34,9 @@ type CreateTaskInput struct {
 	Title       string          `json:"title"                       jsonschema:"task title,required"`
 	Description string          `json:"description,omitempty"       jsonschema:"task description (HTML)"`
 	Priority    int64           `json:"priority,omitempty"          jsonschema:"priority (higher number = more important)"`
-	DueDate     string          `json:"due_date,omitempty"          jsonschema:"due date in ISO 8601 format"`
-	StartDate   string          `json:"start_date,omitempty"        jsonschema:"start date in ISO 8601 format"`
-	EndDate     string          `json:"end_date,omitempty"          jsonschema:"end date in ISO 8601 format"`
+	DueDate     string          `json:"due_date,omitempty"          jsonschema:"RFC 3339 datetime (e.g. 2026-07-09T00:00:00Z)"`
+	StartDate   string          `json:"start_date,omitempty"        jsonschema:"RFC 3339 datetime (e.g. 2026-07-09T00:00:00Z)"`
+	EndDate     string          `json:"end_date,omitempty"          jsonschema:"RFC 3339 datetime (e.g. 2026-07-09T00:00:00Z)"`
 	HexColor    string          `json:"hex_color,omitempty"         jsonschema:"hex color without leading #"`
 	RepeatAfter int64           `json:"repeat_after,omitempty"      jsonschema:"repeat interval in seconds"`
 	Reminders   []ReminderInput `json:"reminders,omitempty"         jsonschema:"list of reminders to set on the task"`
@@ -48,9 +48,9 @@ type UpdateTaskInput struct {
 	Description *string          `json:"description,omitempty"       jsonschema:"new description"`
 	Done        *bool            `json:"done,omitempty"              jsonschema:"completion status"`
 	Priority    *int64           `json:"priority,omitempty"          jsonschema:"new priority"`
-	DueDate     *string          `json:"due_date,omitempty"          jsonschema:"new due date (ISO 8601)"`
-	StartDate   *string          `json:"start_date,omitempty"        jsonschema:"new start date (ISO 8601)"`
-	EndDate     *string          `json:"end_date,omitempty"          jsonschema:"new end date (ISO 8601)"`
+	DueDate     *string          `json:"due_date,omitempty"          jsonschema:"RFC 3339 datetime (e.g. 2026-07-09T00:00:00Z)"`
+	StartDate   *string          `json:"start_date,omitempty"        jsonschema:"RFC 3339 datetime (e.g. 2026-07-09T00:00:00Z)"`
+	EndDate     *string          `json:"end_date,omitempty"          jsonschema:"RFC 3339 datetime (e.g. 2026-07-09T00:00:00Z)"`
 	HexColor    *string          `json:"hex_color,omitempty"         jsonschema:"new hex color without #"`
 	ProjectID   *int64           `json:"project_id,omitempty"        jsonschema:"move task to a different project"`
 	Reminders   *[]ReminderInput `json:"reminders,omitempty"         jsonschema:"replace all reminders (pass empty array to clear)"`
@@ -129,6 +129,12 @@ func registerTaskTools(server *mcp.Server, client *Client) {
 		Name:        "create_task",
 		Description: "Create a new task in a project. Requires project_id and title.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input CreateTaskInput) (*mcp.CallToolResult, any, error) {
+		input.DueDate = normalizeDate(input.DueDate)
+		input.StartDate = normalizeDate(input.StartDate)
+		input.EndDate = normalizeDate(input.EndDate)
+		for i := range input.Reminders {
+			input.Reminders[i].Reminder = normalizeDate(input.Reminders[i].Reminder)
+		}
 		raw, err := client.doRaw(ctx, "POST", fmt.Sprintf("/projects/%d/tasks", input.ProjectID), input)
 		if err != nil {
 			return errorResult(err), nil, nil
@@ -140,6 +146,15 @@ func registerTaskTools(server *mcp.Server, client *Client) {
 		Name:        "update_task",
 		Description: "Update a task's fields. Only the provided fields are changed (partial update via PATCH). Can also move a task to a different project by setting project_id.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input UpdateTaskInput) (*mcp.CallToolResult, any, error) {
+		input.DueDate = normalizeDatePtr(input.DueDate)
+		input.StartDate = normalizeDatePtr(input.StartDate)
+		input.EndDate = normalizeDatePtr(input.EndDate)
+		if input.Reminders != nil {
+			r := *input.Reminders
+			for i := range r {
+				r[i].Reminder = normalizeDate(r[i].Reminder)
+			}
+		}
 		raw, err := client.doRaw(ctx, "PATCH", fmt.Sprintf("/tasks/%d", input.ID), input)
 		if err != nil {
 			return errorResult(err), nil, nil

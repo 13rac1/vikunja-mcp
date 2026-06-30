@@ -1104,7 +1104,7 @@ func TestE2E_PowerQueries_Extra(t *testing.T) {
 	})
 
 	// Task due in 3 days.
-	threeDays := time.Now().UTC().Add(3 * 24 * time.Hour).Format("2006-01-02") + "T12:00:00Z"
+	threeDays := time.Now().UTC().Add(3*24*time.Hour).Format("2006-01-02") + "T12:00:00Z"
 	callTool(t, "create_task", map[string]any{
 		"project_id": projectID,
 		"title":      "Due In 3 Days",

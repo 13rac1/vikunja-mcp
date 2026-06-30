@@ -35,6 +35,7 @@ func registerBatchTools(server *mcp.Server, client *Client) {
 		results := make([]json.RawMessage, 0, len(input.Tasks))
 		failures := 0
 		for _, task := range input.Tasks {
+			normalizeDateMapKeys(task)
 			raw, err := client.doRaw(ctx, "POST", path, task)
 			if err != nil {
 				results = append(results, batchErrJSON(err.Error()))
@@ -77,6 +78,7 @@ func registerBatchTools(server *mcp.Server, client *Client) {
 				failures++
 				continue
 			}
+			normalizeDateMapKeys(task)
 			raw, err := client.doRaw(ctx, "PATCH", fmt.Sprintf("/tasks/%d", int64(idFloat)), task)
 			if err != nil {
 				results = append(results, batchErrJSON(err.Error()))

@@ -1002,6 +1002,98 @@ func TestListProjects_BotGuidance(t *testing.T) {
 	}
 }
 
+func TestNormalizeDate(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"2026-07-09", "2026-07-09T00:00:00Z"},
+		{"2026-12-31", "2026-12-31T00:00:00Z"},
+		{"2026-07-09T14:30:00Z", "2026-07-09T14:30:00Z"},
+		{"2026-07-09T14:30:00+05:00", "2026-07-09T14:30:00+05:00"},
+		{"", ""},
+		{"not-a-date", "not-a-date"},
+		{"2026-07-09T00:00:00Z", "2026-07-09T00:00:00Z"},
+	}
+	for _, tt := range tests {
+		got := normalizeDate(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeDate(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestNormalizeDatePtr(t *testing.T) {
+	if got := normalizeDatePtr(nil); got != nil {
+		t.Errorf("normalizeDatePtr(nil) = %v, want nil", got)
+	}
+	s := "2026-07-09"
+	got := normalizeDatePtr(&s)
+	if got == nil || *got != "2026-07-09T00:00:00Z" {
+		t.Errorf("normalizeDatePtr(%q) = %v, want %q", s, got, "2026-07-09T00:00:00Z")
+	}
+}
+
+func TestNormalizeDateMapKeys(t *testing.T) {
+	m := map[string]any{
+		"title":      "Test task",
+		"due_date":   "2026-07-09",
+		"start_date": "2026-07-01T09:00:00Z",
+		"end_date":   "2026-08-01",
+		"priority":   3,
+	}
+	normalizeDateMapKeys(m)
+	if m["due_date"] != "2026-07-09T00:00:00Z" {
+		t.Errorf("due_date = %q, want %q", m["due_date"], "2026-07-09T00:00:00Z")
+	}
+	if m["start_date"] != "2026-07-01T09:00:00Z" {
+		t.Errorf("start_date should be unchanged: %q", m["start_date"])
+	}
+	if m["end_date"] != "2026-08-01T00:00:00Z" {
+		t.Errorf("end_date = %q, want %q", m["end_date"], "2026-08-01T00:00:00Z")
+	}
+	if m["title"] != "Test task" {
+		t.Errorf("non-date field should be unchanged: %q", m["title"])
+	}
+}
+
+func TestNormalizeDateMapKeys_Reminders(t *testing.T) {
+	m := map[string]any{
+		"title": "Test",
+		"reminders": []any{
+			map[string]any{"reminder": "2026-07-09"},
+			map[string]any{"reminder": "2026-07-09T10:00:00Z"},
+		},
+	}
+	normalizeDateMapKeys(m)
+	reminders, ok := m["reminders"].([]any)
+	if !ok {
+		t.Fatal("reminders should be []any")
+	}
+	r0, ok := reminders[0].(map[string]any)
+	if !ok {
+		t.Fatal("reminder[0] should be map[string]any")
+	}
+	if r0["reminder"] != "2026-07-09T00:00:00Z" {
+		t.Errorf("reminder[0] = %q, want %q", r0["reminder"], "2026-07-09T00:00:00Z")
+	}
+	r1, ok := reminders[1].(map[string]any)
+	if !ok {
+		t.Fatal("reminder[1] should be map[string]any")
+	}
+	if r1["reminder"] != "2026-07-09T10:00:00Z" {
+		t.Errorf("reminder[1] should be unchanged: %q", r1["reminder"])
+	}
+}
+
+func TestNormalizeDateMapKeys_NoDates(t *testing.T) {
+	m := map[string]any{"title": "No dates", "priority": 1}
+	normalizeDateMapKeys(m)
+	if m["title"] != "No dates" || m["priority"] != 1 {
+		t.Error("map without date fields should be unchanged")
+	}
+}
+
 func TestListProjects_NoGuidanceForRegularUser(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
